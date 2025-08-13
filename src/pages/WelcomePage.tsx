@@ -85,7 +85,7 @@ export default function WelcomePage() {
         />
         <div className="relative z-10">
           <h1 className="mb-4 text-3xl font-bold">Welcome to Inkless DB</h1>
-          <p className="text-muted-foreground text-lg italic">
+          <p className="text-muted-foreground text-sm italic">
             Manage your databases without writing queries.
           </p>
         </div>
