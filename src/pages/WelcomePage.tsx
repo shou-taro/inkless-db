@@ -208,17 +208,17 @@ export default function WelcomePage({
   return (
     <div className="flex h-screen flex-row items-center justify-center">
       <Toaster richColors position="top-center" closeButton />
-      <div className="relative flex h-full flex-1 flex-col items-center justify-center overflow-hidden bg-gradient-to-br from-[#f3e8ff] via-[#d8b4fe] to-[#a78bfa] text-center">
+      <div className="relative flex h-full flex-1 flex-col items-center justify-center overflow-hidden bg-gradient-to-br from-violet-50 via-fuchsia-200 to-violet-400 text-center">
         <div
           aria-hidden
           className="pointer-events-none absolute inset-0 z-0 opacity-60"
           style={{
             backgroundImage: [
-              'radial-gradient(circle at 15% 20%, rgba(255,182,193,0.35), transparent 60%)',
-              'radial-gradient(circle at 85% 25%, rgba(255,255,153,0.35), transparent 60%)',
-              'radial-gradient(circle at 30% 80%, rgba(144,238,144,0.35), transparent 60%)',
-              'radial-gradient(circle at 75% 75%, rgba(173,216,230,0.35), transparent 60%)',
-              'radial-gradient(rgba(255,255,255,0.4) 2px, transparent 2px)',
+              'radial-gradient(circle at 15% 20%, rgba(199, 210, 254, 0.35), transparent 60%)', // indigo-200
+              'radial-gradient(circle at 85% 25%, rgba(233, 213, 255, 0.35), transparent 60%)', // purple-200
+              'radial-gradient(circle at 30% 80%, rgba(250, 232, 255, 0.30), transparent 60%)', // fuchsia-100
+              'radial-gradient(circle at 75% 75%, rgba(219, 234, 254, 0.30), transparent 60%)', // sky-100 (cool balance)
+              'radial-gradient(rgba(255,255,255,0.35) 2px, transparent 2px)',
             ].join(', '),
             backgroundSize:
               '100% 100%, 100% 100%, 100% 100%, 100% 100%, 20px 20px',
@@ -226,8 +226,10 @@ export default function WelcomePage({
           }}
         />
         <div className="relative z-10">
-          <h1 className="mb-4 text-3xl font-bold">Welcome to Inkless DB</h1>
-          <p className="text-sm italic text-muted-foreground">
+          <h1 className="mb-4 text-3xl font-bold text-gray-900">
+            Welcome to Inkless DB
+          </h1>
+          <p className="text-sm italic text-gray-700">
             Manage your databases without writing queries.
           </p>
         </div>
