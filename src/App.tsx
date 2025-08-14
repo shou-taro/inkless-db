@@ -5,13 +5,16 @@ import GraphPage from './pages/GraphPage';
 type View = 'welcome' | 'graph' | 'sheet';
 
 export default function App() {
-  const [view, setView] = useState<View>('graph');
+  const [view, setView] = useState<View>('welcome');
 
   return (
     <div className="flex h-screen flex-col">
       <main className="min-h-0 flex-1">
-        {view === 'welcome' && <WelcomePage />}
-        {view === 'graph' && <GraphPage />}
+        {view === 'welcome' ? (
+          <WelcomePage onOpenGraph={() => setView('graph')} />
+        ) : (
+          <GraphPage />
+        )}
       </main>
     </div>
   );
