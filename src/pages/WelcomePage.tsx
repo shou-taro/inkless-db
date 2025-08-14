@@ -1,4 +1,32 @@
-import { useEffect, useRef, useState } from 'react';
+/**
+ * WelcomePage
+ * -----------
+ * This is the landing screen that greets the user and provides entry points
+ * for opening or connecting to different types of databases.
+ *
+ * Features
+ * --------
+ * - SQLite: Provides a drag‑and‑drop enabled Dropzone, as well as a manual
+ *   browse option, for selecting `.sqlite` or `.db` files. Uses helper
+ *   utilities to validate file types and extract file names.
+ * - PostgreSQL & MySQL: Presently placeholders with form fields for
+ *   connection parameters (host, port, database, user, password), ready
+ *   for future integration.
+ *
+ * Implementation notes
+ * --------------------
+ * - Styling uses shadcn/ui components with custom variants (`brand` and
+ *   `brandOutline`) defined via class‑variance‑authority, ensuring a
+ *   consistent look and feel.
+ * - Drag state is managed via a reducer to handle nested drag events without
+ *   leaving the UI stuck in a "dragging" state.
+ * - File name and extension checks are centralised in `@/lib/fileUtils` for
+ *   re‑use and easier testing.
+ * - A global effect intercepts `dragover` and `drop` events on the window to
+ *   prevent the browser from navigating away when a file is dropped outside
+ *   the intended target.
+ */
+import { useEffect, useRef, useState, useCallback, useReducer } from 'react';
 import {
   Card,
   CardContent,
@@ -11,9 +39,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Upload, CheckCircle2, FileText } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 import { useDb } from '@/lib/db/context';
+import { formatBytes } from '@/lib/format';
+import { getBaseName, isAcceptedFileName } from '@/lib/file-utils';
+import Dropzone from '@/components/Dropzone';
 
 export default function WelcomePage({
   onOpenGraph,
@@ -21,25 +51,57 @@ export default function WelcomePage({
   onOpenGraph: () => void;
 }) {
   const [sqlitePath, setSqlitePath] = useState('');
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragDepth, setDragDepth] = useState(0);
+  type DragState = { depth: number; dragging: boolean };
+  type DragAction =
+    | { type: 'enter' }
+    | { type: 'leave' }
+    | { type: 'drop' }
+    | { type: 'reset' };
+  const [drag, dispatchDrag] = useReducer(
+    (state: DragState, action: DragAction): DragState => {
+      switch (action.type) {
+        case 'enter': {
+          const depth = state.depth + 1;
+          return { depth, dragging: true };
+        }
+        case 'leave': {
+          const depth = Math.max(0, state.depth - 1);
+          return { depth, dragging: depth > 0 };
+        }
+        case 'drop':
+        case 'reset':
+          return { depth: 0, dragging: false };
+        default:
+          return state;
+      }
+    },
+    { depth: 0, dragging: false }
+  );
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { connect } = useDb();
 
-  const formatBytes = (bytes?: number | null) => {
-    if (!bytes && bytes !== 0) return '';
-    const units = ['B', 'KB', 'MB', 'GB'];
-    let v = bytes;
-    let i = 0;
-    while (v >= 1024 && i < units.length - 1) {
-      v = v / 1024;
-      i++;
-    }
-    return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
-  };
+  const resetSelection = useCallback(() => {
+    setSqlitePath('');
+    setSelectedFile(null);
+    setSelectedPath(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }, []);
 
+  const showUnsupportedToast = useCallback(
+    () =>
+      toast.error(
+        <span>
+          Unsupported file type.
+          <br />
+          Please select a .sqlite or .db file.
+        </span>
+      ),
+    []
+  );
+
+  // Prevent the browser from hijacking file drops (helps avoid accidental navigation).
   useEffect(() => {
     const stop = (e: DragEvent) => {
       e.preventDefault();
@@ -53,35 +115,22 @@ export default function WelcomePage({
     };
   }, []);
 
-  const getBaseName = (p: string) => {
-    const parts = p.split(/[\\/]/);
-    return parts[parts.length - 1] || p;
-  };
-
-  const handlePath = async (path: string) => {
-    const ok = /\.(sqlite|db)$/i.test(path);
-    if (!ok) {
-      setSqlitePath('');
+  const handlePath = useCallback(
+    async (path: string) => {
+      if (!isAcceptedFileName(path)) {
+        resetSelection();
+        showUnsupportedToast();
+        return;
+      }
+      const name = getBaseName(path);
+      setSqlitePath(name);
+      setSelectedPath(path);
       setSelectedFile(null);
-      setSelectedPath(null);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      toast.error(
-        <span>
-          Unsupported file type.
-          <br />
-          Please select a .sqlite or .db file.
-        </span>
-      );
-      return;
-    }
-    const name = getBaseName(path);
-    setSqlitePath(name);
-    setSelectedPath(path);
-    setSelectedFile(null);
-  };
+    },
+    [resetSelection, showUnsupportedToast]
+  );
 
-  const onBrowseClick = async () => {
-    // Try Tauri native dialog first; if not available (web/dev) fall back to browser picker
+  const onBrowseClick = useCallback(async () => {
     try {
       const mod = await import('@tauri-apps/plugin-dialog');
       const selected = await mod.open({
@@ -97,78 +146,65 @@ export default function WelcomePage({
         await handlePath(selected[0] as string);
         return;
       }
-      // User cancelled: do nothing
       return;
-    } catch (e) {
-      // Fallback: some environments block programmatic clicks on fully hidden inputs.
-      // Using <label htmlFor> above should already work, but also try programmatic click.
+    } catch {
       fileInputRef.current?.click();
     }
-  };
+  }, [handlePath]);
 
-  const handleFile = async (f: File) => {
-    const name = f.name || '';
-    const ok = /\.(sqlite|db)$/i.test(name);
-    if (!ok) {
-      setSqlitePath('');
-      setSelectedFile(null);
+  const handleFile = useCallback(
+    async (f: File) => {
+      const name = f.name || '';
+      if (!isAcceptedFileName(name)) {
+        resetSelection();
+        showUnsupportedToast();
+        return;
+      }
+      setSqlitePath(name);
+      setSelectedFile(f);
       setSelectedPath(null);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      toast.error(
-        <span>
-          Unsupported file type.
-          <br />
-          Please select a .sqlite or .db file.
-        </span>
-      );
-      return;
-    }
-    setSqlitePath(name);
-    setSelectedFile(f);
-    setSelectedPath(null);
-  };
+    },
+    [resetSelection, showUnsupportedToast]
+  );
 
-  const onFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (f) await handleFile(f);
-  };
+  const onFileChange = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const f = e.target.files?.[0];
+      if (f) await handleFile(f);
+    },
+    [handleFile]
+  );
 
-  const onDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+  const onDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
     if (e.dataTransfer) {
       e.dataTransfer.dropEffect = 'copy';
     }
-  };
+  }, []);
 
-  const onDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
+  const onDragEnter = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
-    setDragDepth((d) => {
-      const next = d + 1;
-      if (next === 1) setIsDragging(true);
-      return next;
-    });
-  };
+    dispatchDrag({ type: 'enter' });
+  }, []);
 
-  const onDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+  const onDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
-    setDragDepth((d) => {
-      const next = Math.max(0, d - 1);
-      if (next === 0) setIsDragging(false);
-      return next;
-    });
-  };
+    dispatchDrag({ type: 'leave' });
+  }, []);
 
-  const onDrop = async (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragDepth(0);
-    setIsDragging(false);
-    const f = e.dataTransfer.files?.[0];
-    if (f) await handleFile(f);
-  };
+  const onDrop = useCallback(
+    async (e: React.DragEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dispatchDrag({ type: 'drop' });
+      const f = e.dataTransfer.files?.[0];
+      if (f) await handleFile(f);
+    },
+    [handleFile]
+  );
 
   return (
     <div className="flex h-screen flex-row items-center justify-center">
@@ -216,133 +252,27 @@ export default function WelcomePage({
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div className="grid gap-4">
-                    <div
+                    <Dropzone
+                      sqlitePath={sqlitePath}
+                      selectedFile={selectedFile}
+                      selectedPath={selectedPath}
+                      isDragging={drag.dragging}
                       onDragEnter={onDragEnter}
                       onDragOver={onDragOver}
                       onDragLeave={onDragLeave}
                       onDrop={onDrop}
-                      className={`h-52 overflow-hidden rounded border-2 border-dashed p-6 text-center transition ${isDragging || sqlitePath ? 'border-primary/70 bg-muted/60' : 'border-muted-foreground/25'}`}
-                    >
-                      {sqlitePath ? (
-                        <div className="flex h-full flex-col items-center justify-center">
-                          <div className="mb-3 flex items-center gap-2 rounded-full bg-white/70 px-3 py-1 text-sm shadow-sm ring-1 ring-white/60">
-                            <CheckCircle2
-                              className="h-4 w-4 text-emerald-600"
-                              aria-hidden="true"
-                            />
-                            <span className="font-medium text-foreground">
-                              Ready to open
-                            </span>
-                          </div>
-
-                          <div
-                            className="group mx-auto flex max-w-full items-center gap-2 rounded-md bg-white/70 px-3 py-2 shadow-sm ring-1 ring-white/60"
-                            aria-live="polite"
-                            title={sqlitePath}
-                          >
-                            <FileText
-                              className="h-4 w-4 opacity-70"
-                              aria-hidden="true"
-                            />
-                            <span className="max-w-[420px] truncate font-medium text-foreground">
-                              {sqlitePath}
-                            </span>
-                            {selectedFile && (
-                              <span className="ml-2 rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] leading-none text-zinc-700 ring-1 ring-zinc-200">
-                                {formatBytes(selectedFile.size)}
-                              </span>
-                            )}
-                            {selectedPath && (
-                              <span className="ml-2 rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] leading-none text-zinc-700 ring-1 ring-zinc-200">
-                                from path
-                              </span>
-                            )}
-                          </div>
-
-                          <div className="mt-5 flex items-center gap-2">
-                            <Button
-                              asChild
-                              type="button"
-                              variant="secondary"
-                              className="bg-[#a78bfa] text-white hover:bg-[#8b5cf6]"
-                            >
-                              <label
-                                htmlFor="sqlite-file-input"
-                                onClick={onBrowseClick}
-                              >
-                                Choose another file
-                              </label>
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              className="border-[#a78bfa] text-[#7c3aed] hover:bg-[#a78bfa]/10 hover:text-[#7c3aed]"
-                              onClick={() => {
-                                setSqlitePath('');
-                                setSelectedFile(null);
-                                setSelectedPath(null);
-                                if (fileInputRef.current)
-                                  fileInputRef.current.value = '';
-                              }}
-                            >
-                              Clear
-                            </Button>
-                          </div>
-                        </div>
-                      ) : (
-                        <>
-                          <div className="mx-auto mb-0.5 flex h-10 w-10 items-center justify-center rounded">
-                            <Upload
-                              className="h-6 w-6 opacity-70"
-                              aria-hidden="true"
-                            />
-                          </div>
-                          <p className="text-sm font-medium">
-                            No file selected
-                          </p>
-                          <p className="mt-6 py-0.5 text-xs text-muted-foreground">
-                            Drag & drop a .sqlite / .db file, or
-                          </p>
-                          <p className="mt-1 text-[11px] text-zinc-600/80">
-                            You can also use the button below to pick a file.
-                          </p>
-                          <Button
-                            asChild
-                            type="button"
-                            variant="secondary"
-                            className="mt-3 bg-[#a78bfa] text-white hover:bg-[#8b5cf6]"
-                          >
-                            <label
-                              htmlFor="sqlite-file-input"
-                              onClick={onBrowseClick}
-                            >
-                              Choose file
-                            </label>
-                          </Button>
-                        </>
-                      )}
-                      <input
-                        id="sqlite-file-input"
-                        ref={fileInputRef}
-                        type="file"
-                        accept=".sqlite,.db"
-                        className="hidden"
-                        tabIndex={-1}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Backspace' || e.key === 'Delete') {
-                            e.preventDefault();
-                          }
-                        }}
-                        onChange={onFileChange}
-                      />
-                    </div>
+                      onBrowseClick={onBrowseClick}
+                      onFileChange={onFileChange}
+                      fileInputRef={fileInputRef}
+                      resetSelection={resetSelection}
+                      formatBytes={formatBytes}
+                    />
                   </div>
                 </CardContent>
                 <CardFooter className="flex justify-end gap-2">
                   <Button
                     type="button"
-                    variant="secondary"
-                    className="bg-[#a78bfa] text-white hover:bg-[#8b5cf6]"
+                    variant="brand"
                     disabled={!sqlitePath}
                     onClick={async () => {
                       try {
@@ -410,20 +340,10 @@ export default function WelcomePage({
                   </div>
                 </CardContent>
                 <CardFooter className="flex justify-end gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="border-[#a78bfa] text-[#7c3aed] hover:bg-[#a78bfa]/10 hover:text-[#7c3aed] active:text-[#7c3aed]"
-                    disabled
-                  >
+                  <Button type="button" variant="brandOutline" disabled>
                     Test connection
                   </Button>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    className="bg-[#a78bfa] text-white hover:bg-[#8b5cf6]"
-                    disabled
-                  >
+                  <Button type="button" variant="brand" disabled>
                     Connect
                   </Button>
                 </CardFooter>
@@ -469,20 +389,10 @@ export default function WelcomePage({
                   </div>
                 </CardContent>
                 <CardFooter className="flex justify-end gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="border-[#a78bfa] text-[#7c3aed] hover:bg-[#a78bfa]/10 hover:text-[#7c3aed] active:text-[#7c3aed]"
-                    disabled
-                  >
+                  <Button type="button" variant="brandOutline" disabled>
                     Test connection
                   </Button>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    className="bg-[#a78bfa] text-white hover:bg-[#8b5cf6]"
-                    disabled
-                  >
+                  <Button type="button" variant="brand" disabled>
                     Connect
                   </Button>
                 </CardFooter>
