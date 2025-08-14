@@ -9,7 +9,7 @@
  *
  * Props allow for complete control of drag state, file handling, and UI behaviour.
  */
-import React, { useId } from 'react';
+import React, { useEffect, useId, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Upload, CheckCircle2, FileText } from 'lucide-react';
 
@@ -21,16 +21,12 @@ import { Upload, CheckCircle2, FileText } from 'lucide-react';
  */
 export type DropzoneProps = {
   sqlitePath: string;
-  selectedFile: File | null;
-  selectedPath: string | null;
   isDragging: boolean;
   onDragEnter: (e: React.DragEvent<HTMLDivElement>) => void;
   onDragOver: (e: React.DragEvent<HTMLDivElement>) => void;
   onDragLeave: (e: React.DragEvent<HTMLDivElement>) => void;
   onDrop: (e: React.DragEvent<HTMLDivElement>) => void;
   onBrowseClick: () => void;
-  onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  fileInputRef: React.RefObject<HTMLInputElement | null>;
   resetSelection: () => void;
   formatBytes: (bytes?: number | null) => string;
 };
@@ -42,23 +38,59 @@ export type DropzoneProps = {
  */
 export default function Dropzone({
   sqlitePath,
-  selectedFile,
-  selectedPath,
   isDragging,
   onDragEnter,
   onDragOver,
   onDragLeave,
   onDrop,
   onBrowseClick,
-  onFileChange,
-  fileInputRef,
   resetSelection,
   formatBytes,
 }: DropzoneProps) {
   // Generate a unique, stable id for the hidden input to avoid collisions when multiple Dropzones exist.
   const autoId = useId();
-  const inputId = `sqlite-file-input-${autoId}`;
   const descId = `dropzone-desc-${autoId}`;
+
+  // When using the desktop app, resolve the file size from the OS path.
+  const [pathSize, setPathSize] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!sqlitePath) {
+        setPathSize(null);
+        return;
+      }
+      try {
+        const w: any = typeof window !== 'undefined' ? window : undefined;
+        if (w && w.__TAURI__ && typeof w.__TAURI__.invoke === 'function') {
+          try {
+            const res = await w.__TAURI__.invoke('inkless_fs_size', {
+              path: sqlitePath,
+            });
+            if (!cancelled) {
+              const bytes =
+                typeof res === 'number'
+                  ? res
+                  : res && typeof res.size === 'number'
+                    ? res.size
+                    : null;
+              setPathSize(bytes);
+            }
+            return;
+          } catch {
+            // Ignore; will leave size unresolved if the command is not available
+          }
+        }
+        if (!cancelled) setPathSize(null);
+      } catch {
+        if (!cancelled) setPathSize(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sqlitePath]);
 
   return (
     <div
@@ -98,16 +130,9 @@ export default function Dropzone({
             <span className="max-w-[420px] truncate font-medium text-foreground">
               {sqlitePath}
             </span>
-            {selectedFile && (
-              <span className="ml-2 rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] leading-none text-zinc-700 ring-1 ring-zinc-200">
-                {formatBytes(selectedFile.size)}
-              </span>
-            )}
-            {selectedPath && (
-              <span className="ml-2 rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] leading-none text-zinc-700 ring-1 ring-zinc-200">
-                from path
-              </span>
-            )}
+            <span className="ml-2 rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] leading-none text-zinc-700 ring-1 ring-zinc-200">
+              {formatBytes(pathSize ?? 0)}
+            </span>
           </div>
 
           {/* NOTE (en‑GB): Do not use a <label htmlFor=...> here, as it would also trigger the hidden
@@ -149,10 +174,6 @@ export default function Dropzone({
           <p id={descId} className="mt-6 py-0.5 text-xs text-muted-foreground">
             Drag &amp; drop a .sqlite / .db file, or use the button below.
           </p>
-          <p className="mt-1 text-[11px] text-zinc-600/80">
-            Choosing a file will not modify its contents; it simply opens the
-            database read-only at first.
-          </p>
 
           {/* NOTE (en‑GB): Do not use a <label htmlFor=...> here, as it would also trigger the hidden
               <input type="file"> and cause two file pickers (native + OS dialog). We exclusively
@@ -172,26 +193,6 @@ export default function Dropzone({
           </Button>
         </>
       )}
-
-      {/* Hidden file input for manual file selection.
-          Triggered via the 'Choose file' or 'Choose another file' buttons.
-          Includes a keydown handler to prevent accidental deletion in some browsers. */}
-      <input
-        id={inputId}
-        ref={fileInputRef}
-        type="file"
-        accept=".sqlite,.db"
-        className="hidden"
-        tabIndex={-1}
-        onClick={(e) => e.stopPropagation()}
-        onPointerDown={(e) => e.stopPropagation()}
-        onKeyDown={(e) => {
-          if (e.key === 'Backspace' || e.key === 'Delete') {
-            e.preventDefault();
-          }
-        }}
-        onChange={onFileChange}
-      />
     </div>
   );
   // End of Dropzone. Further customisation (variants, icons, layout) should be performed via props and tokens rather than hard‑coded classes.

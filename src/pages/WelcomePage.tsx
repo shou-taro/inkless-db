@@ -152,13 +152,6 @@ export default function WelcomePage({
     }
   }, [handlePath]);
 
-  const noopOnFileChange = useCallback(async () => {
-    // Desktop (Tauri) requires a filesystem path; avoid HTML file input.
-    toast.error(
-      'Please use “Choose…” to pick the database (desktop requires a file path).'
-    );
-  }, []);
-
   const handleFile = useCallback(
     async (f: File) => {
       const name = f.name || '';
@@ -226,7 +219,7 @@ export default function WelcomePage({
           }}
         />
         <div className="relative z-10">
-          <h1 className="mb-4 text-3xl font-bold text-gray-900">
+          <h1 className="mb-4 bg-gradient-to-r from-violet-800 via-fuchsia-600 to-violet-700 bg-clip-text text-3xl font-bold text-transparent drop-shadow-sm">
             Welcome to Inkless DB
           </h1>
           <p className="text-sm italic text-gray-700">
@@ -255,8 +248,8 @@ export default function WelcomePage({
                   <div className="grid gap-4">
                     <Dropzone
                       sqlitePath={sqlitePath}
-                      selectedFile={selectedFile}
-                      selectedPath={selectedPath}
+                      // selectedFile={selectedFile}
+                      // selectedPath={selectedPath}
                       isDragging={drag.dragging}
                       onDragEnter={onDragEnter}
                       onDragOver={onDragOver}
@@ -265,8 +258,8 @@ export default function WelcomePage({
                       onBrowseClick={onBrowseClick}
                       resetSelection={resetSelection}
                       formatBytes={formatBytes}
-                      onFileChange={noopOnFileChange}
-                      fileInputRef={fileInputRef}
+                      // onFileChange={noopOnFileChange}
+                      // fileInputRef={fileInputRef}
                     />
                   </div>
                 </CardContent>

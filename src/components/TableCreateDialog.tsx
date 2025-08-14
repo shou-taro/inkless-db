@@ -116,7 +116,6 @@ export function TableCreateDialog({
     }
     try {
       // TODO: Tauri invoke('create_table', { sql: createSQL })
-      console.log(createSQL);
       toast.success(`Created "${tableName}"`);
       onCreated?.(tableName);
       onOpenChange(false);

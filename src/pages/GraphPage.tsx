@@ -29,7 +29,16 @@ import {
 } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { ZoomIn, ZoomOut, Maximize2, Crosshair } from 'lucide-react';
+import {
+  ZoomIn,
+  ZoomOut,
+  Maximize2,
+  Crosshair,
+  Table,
+  FileText,
+  Clipboard,
+  LogOut,
+} from 'lucide-react';
 
 import SchemaBrowser from '@/components/SchemaBrowser';
 import GraphCanvas from '@/components/GraphCanvas';
@@ -77,8 +86,9 @@ type Schema = {
 type DbInfo = {
   path: string;
   sizeBytes?: number;
-  openedAt?: string; // ISO string
 };
+
+type PreviewResult = { columns: string[]; rows: any[] };
 
 // Optional globals populated by WelcomePage after selecting a SQLite file.
 declare global {
@@ -103,10 +113,6 @@ declare global {
 const nodeTypes = { table: TableNode };
 
 function schemaToFlow(schema: Schema) {
-  console.log('[DBG] schemaToFlow input:', {
-    tableCount: schema.tables.length,
-    fkCount: schema.fks.length,
-  });
   // Choose a near-square grid based on table count to prevent excessively wide rows.
   const count = schema.tables.length || 1;
   const cols = Math.max(1, Math.ceil(Math.sqrt(count)));
@@ -137,14 +143,6 @@ export default function GraphPage() {
     fks: [],
   });
   const [dbInfo, setDbInfo] = useState<DbInfo | null>(null);
-
-  useEffect(() => {
-    console.log('[DBG] activeSchema updated:', {
-      tables: activeSchema?.tables?.length ?? 0,
-      fks: activeSchema?.fks?.length ?? 0,
-      sampleTables: activeSchema?.tables?.slice(0, 3)?.map((t) => t.name),
-    });
-  }, [activeSchema]);
 
   // Central DB context (WelcomePage controls connection lifecycle)
   const dbCtx = useDb();
@@ -228,15 +226,6 @@ export default function GraphPage() {
     const fetchFromClient = async () => {
       // Debug: observe current context state before applying guards
       const conn: any = dbCtx?.connection;
-      console.log('[DBG] fetchFromClient guards:', {
-        status: (dbCtx as any)?.status,
-        hasClient: Boolean(dbCtx?.client),
-        connection: {
-          hasPath: Boolean(conn?.path),
-          hasFile: Boolean(conn?.file),
-          path: conn?.path,
-        },
-      });
       const hasPath = Boolean(conn?.path);
       const hasClient = Boolean(dbCtx?.client);
       if (!hasPath || !hasClient) {
@@ -258,8 +247,7 @@ export default function GraphPage() {
             ? c.getDbInfo()
             : Promise.resolve(c.dbInfo ?? c.info ?? c.meta ?? null),
         ]);
-        console.log('[DBG] DbClient.getSchema result:', s);
-        console.log('[DBG] DbClient.getDbInfo result:', info);
+
         if (!cancelled) {
           if (s && Array.isArray(s.tables)) setActiveSchema(s);
           if (info && info.path) setDbInfo(info);
@@ -285,31 +273,20 @@ export default function GraphPage() {
 
   // Observe DbContext transitions (helps confirm WelcomePage -> Provider updates)
   useEffect(() => {
-    console.log('[DBG] DbContext changed:', {
-      status: (dbCtx as any)?.status,
-      hasClient: Boolean(dbCtx?.client),
-      connection: (dbCtx as any)?.connection,
-    });
     // Expose for ad-hoc inspection from DevTools
     (window as any).__DBG_DBCTX__ = dbCtx;
   }, [dbCtx]);
 
   // Derive minimal dbInfo from the active connection so the header shows immediately.
   useEffect(() => {
-    console.log(
-      '[DBG] derive dbInfo from connection:',
-      (dbCtx as any)?.connection
-    );
     const conn: any = dbCtx?.connection;
     if (!conn) return;
     const path: string | undefined = conn.path;
     if (!path) return;
 
-    console.log('[DBG] inferred dbInfo path (tauri):', path);
     setDbInfo((prev) => ({
       path,
       sizeBytes: prev?.sizeBytes,
-      openedAt: prev?.openedAt ?? new Date().toISOString(),
     }));
 
     // On Tauri, fetch richer info (size, etc.) once available.
@@ -331,6 +308,11 @@ export default function GraphPage() {
   const [query, setQuery] = useState('');
   const [rf, setRf] = useState<ReactFlowInstance | null>(null);
 
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<PreviewResult | null>(null);
+
   const { nodes: initialNodes, edges: initialEdges } = useMemo(
     () => schemaToFlow(activeSchema),
     [activeSchema]
@@ -340,10 +322,6 @@ export default function GraphPage() {
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
   // When the active schema changes, refresh nodes/edges to reflect the new DB.
   useEffect(() => {
-    console.log('[DBG] initial flow:', {
-      nodes: initialNodes.length,
-      edges: initialEdges.length,
-    });
     setNodes(initialNodes);
     setEdges(initialEdges);
   }, [initialNodes, initialEdges, setNodes, setEdges]);
@@ -364,6 +342,121 @@ export default function GraphPage() {
 
   const onNodeClick: NodeMouseHandler = (_e, node) => {
     setSelectedId(node.id);
+  };
+
+  const loadPreview = async (tableName: string) => {
+    setPreviewLoading(true);
+    setPreviewError(null);
+    setPreview(null);
+    try {
+      const client: any = dbCtx?.client;
+      if (client && typeof client.getRows === 'function') {
+        const res = await client.getRows({ table: tableName, limit: 5 });
+        if (res && Array.isArray(res.rows)) {
+          const cols = Array.isArray(res.columns)
+            ? res.columns
+            : res.rows[0]
+              ? Object.keys(res.rows[0])
+              : [];
+          setPreview({ columns: cols, rows: res.rows });
+          return;
+        }
+      }
+
+      // Fallback: call into Tauri using a single canonical command.
+      // Fallback: call into Tauri using a single canonical command.
+      // We standardise on `db_get_rows` with a positional string only.
+      if (tauriInvoke) {
+        // Normalise backend replies into { columns, rows }
+        const asPreview = (res: any): PreviewResult | null => {
+          if (!res) return null;
+          if (Array.isArray(res.rows)) {
+            const cols = Array.isArray(res.columns)
+              ? res.columns
+              : res.rows[0]
+                ? Object.keys(res.rows[0])
+                : [];
+            return { columns: cols, rows: res.rows };
+          }
+          if (Array.isArray(res)) {
+            const cols = res[0] ? Object.keys(res[0]) : [];
+            return { columns: cols, rows: res };
+          }
+          return null;
+        };
+
+        try {
+          // Debug log the type and value of tableName before invoking db_get_rows.
+          console.log(
+            '[DBG] preview: db_get_rows arg typeof/value =',
+            typeof tableName,
+            tableName
+          );
+          console.log(
+            '[DBG] preview: invoking db_get_rows (positional string) for table',
+            tableName
+          );
+          const res = await tauriInvoke('db_get_rows', tableName as any);
+          const preview = asPreview(res);
+          if (preview) {
+            setPreview(preview);
+            return;
+          }
+          // If we reached here, the response shape was unexpected or empty.
+          setPreviewError('Unexpected response from db_get_rows.');
+          return;
+        } catch (e: any) {
+          const msg = String(e?.message || e);
+
+          // If backend complains about type, attempt a robust raw-SQL fallback.
+          if (/expected a string/i.test(msg) || /invalid args/i.test(msg)) {
+            try {
+              const sql = `SELECT * FROM "${String(tableName).split('"').join('""')}" LIMIT 5`;
+              console.log(
+                '[DBG] preview: falling back to inkless_exec_sql with',
+                sql
+              );
+              const res2 = await tauriInvoke('inkless_exec_sql', {
+                sql,
+              } as any);
+              const asPreview = (res: any): PreviewResult | null => {
+                if (!res) return null;
+                if (Array.isArray(res.rows)) {
+                  const cols = Array.isArray(res.columns)
+                    ? res.columns
+                    : res.rows[0]
+                      ? Object.keys(res.rows[0])
+                      : [];
+                  return { columns: cols, rows: res.rows };
+                }
+                if (Array.isArray(res)) {
+                  const cols = res[0] ? Object.keys(res[0]) : [];
+                  return { columns: cols, rows: res };
+                }
+                return null;
+              };
+              const preview2 = asPreview(res2);
+              if (preview2) {
+                setPreview(preview2);
+                return;
+              }
+            } catch (e2) {
+              // ignore and fall through to error surface
+            }
+          }
+
+          // Surface a concise message and stop.
+          setPreviewError(msg);
+          return;
+        }
+      }
+
+      setPreviewError('Row preview is not available for this connection.');
+    } catch (e: any) {
+      setPreviewError(String(e?.message || e));
+    } finally {
+      setPreviewLoading(false);
+    }
   };
 
   return (
@@ -426,38 +519,195 @@ export default function GraphPage() {
                 </div>
               )}
 
+              {isPreviewOpen && (
+                <div className="pointer-events-auto fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+                  <Card className="w-[880px] max-w-[95vw]">
+                    <CardHeader className="flex flex-row items-center justify-between">
+                      <CardTitle className="text-violet-700">
+                        {selectedId ? `Preview: ${selectedId}` : 'Preview'}
+                      </CardTitle>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setIsPreviewOpen(false)}
+                        >
+                          Close
+                        </Button>
+                      </div>
+                    </CardHeader>
+                    <CardContent>
+                      {previewLoading && (
+                        <div className="py-6 text-center text-sm text-slate-600">
+                          Loading preview…
+                        </div>
+                      )}
+                      {previewError && (
+                        <div className="py-6 text-center text-sm text-red-600">
+                          {previewError}
+                        </div>
+                      )}
+                      {!previewLoading && !previewError && preview && (
+                        <div className="overflow-auto rounded-md border">
+                          <table className="w-full table-auto text-sm">
+                            <thead className="bg-violet-50 text-slate-700">
+                              <tr>
+                                {preview.columns.map((c) => (
+                                  <th
+                                    key={c}
+                                    className="whitespace-nowrap px-3 py-2 text-left font-medium"
+                                  >
+                                    {c}
+                                  </th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y">
+                              {preview.rows.length === 0 ? (
+                                <tr>
+                                  <td
+                                    className="px-3 py-3 text-center text-slate-500"
+                                    colSpan={Math.max(
+                                      1,
+                                      preview.columns.length
+                                    )}
+                                  >
+                                    (no rows)
+                                  </td>
+                                </tr>
+                              ) : (
+                                preview.rows.map((r, i) => (
+                                  <tr key={i} className="hover:bg-violet-50/40">
+                                    {preview.columns.map((c) => (
+                                      <td
+                                        key={c}
+                                        className="whitespace-nowrap px-3 py-2 align-top text-slate-700"
+                                      >
+                                        {(() => {
+                                          const v = r?.[c];
+                                          if (v === null || v === undefined)
+                                            return (
+                                              <span className="text-slate-400">
+                                                NULL
+                                              </span>
+                                            );
+                                          if (typeof v === 'object')
+                                            return (
+                                              <code className="text-xs">
+                                                {JSON.stringify(v)}
+                                              </code>
+                                            );
+                                          return String(v);
+                                        })()}
+                                      </td>
+                                    ))}
+                                  </tr>
+                                ))
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                </div>
+              )}
+
               {/* Canvas panel */}
               <div className="absolute inset-0 flex flex-col rounded-xl border border-violet-200/50 bg-violet-200/70 p-2 shadow-lg backdrop-blur-sm">
                 {/* Header: ER diagram title and DB info */}
-                <div className="flex min-h-[3.25rem] items-center px-2 pb-1">
-                  <span className="mr-4 shrink-0 bg-gradient-to-r from-violet-700 via-fuchsia-600 to-violet-700 bg-clip-text text-lg font-semibold text-transparent">
-                    ER diagram
-                  </span>
-                  <div className="flex min-w-0 items-center gap-2 text-sm text-slate-600">
-                    {dbInfo?.path ? (
-                      <>
-                        <span className="mx-2 text-slate-300">•</span>
-                        <span
-                          title={dbInfo.path}
-                          className="max-w-[44ch] truncate"
-                        >
-                          {dbInfo.path.split(/[\\/]/).pop()}
-                        </span>
-                        {typeof dbInfo.sizeBytes === 'number' && (
-                          <span className="text-xs text-slate-500/90">
-                            ({formatBytes(dbInfo.sizeBytes)})
+                <div className="mb-1 flex min-h-[3.25rem] items-center px-2 pb-3 pr-24">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span className="shrink-0 bg-gradient-to-r from-violet-700 via-fuchsia-600 to-violet-700 bg-clip-text text-lg font-semibold text-transparent">
+                      ER diagram
+                    </span>
+
+                    {/* File info pill now sits next to the title, avoiding overlap with the right toolbar */}
+                    <div className="ml-3 flex min-w-0 items-center gap-1.5 rounded-full border border-violet-200/60 bg-white/70 px-2 py-1 shadow-sm backdrop-blur-sm">
+                      {dbInfo?.path ? (
+                        <>
+                          <FileText
+                            className="h-4 w-4 shrink-0 text-violet-700"
+                            aria-hidden
+                          />
+                          <span
+                            title={dbInfo.path}
+                            className="min-w-0 max-w-[52ch] truncate text-sm text-slate-700"
+                          >
+                            {dbInfo.path.split(/[\\/]/).pop()}
                           </span>
-                        )}
-                      </>
-                    ) : (
-                      <span className="rounded border border-dashed border-slate-300 px-2 py-0.5 text-xs text-slate-600">
-                        No database loaded
-                      </span>
-                    )}
+                          {typeof dbInfo.sizeBytes === 'number' && (
+                            <span className="ml-2 shrink-0 rounded bg-violet-100 px-1.5 py-0.5 text-xs font-medium text-violet-700">
+                              {formatBytes(dbInfo.sizeBytes)}
+                            </span>
+                          )}
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            className="ml-1 h-7 w-7 shrink-0 text-slate-600 hover:text-slate-900"
+                            onClick={() => {
+                              try {
+                                if (dbInfo?.path)
+                                  navigator.clipboard?.writeText(dbInfo.path);
+                              } catch {}
+                            }}
+                            aria-label="Copy file path"
+                            title="Copy file path"
+                          >
+                            <Clipboard className="h-4 w-4" />
+                          </Button>
+                        </>
+                      ) : (
+                        <span className="rounded-full border border-dashed border-slate-300 bg-white/60 px-3 py-1 text-xs text-slate-600">
+                          No database loaded
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
                 {/* Floating toolbar (top‑right) */}
                 <div className="pointer-events-auto absolute right-3 top-3 z-10 flex items-center gap-1">
+                  <Button
+                    size="icon"
+                    variant="outline"
+                    className="mr-1 border-violet-200/60 bg-white/70 backdrop-blur-sm hover:bg-white/90"
+                    aria-label="End session and return to Welcome"
+                    title="End session and return to Welcome"
+                    onClick={async () => {
+                      try {
+                        // Politely disconnect the shared DbContext if available
+                        dbCtx?.disconnect?.();
+                      } catch {}
+                      try {
+                        // Ask backend (if present) to clear its connection state
+                        if (tauriInvoke) {
+                          try {
+                            await tauriInvoke('inkless_disconnect');
+                          } catch {}
+                        }
+                      } catch {}
+                      try {
+                        // Clear any globals and cached schema/info so we land fresh on Welcome
+                        delete (window as any).__INKLESS_SCHEMA__;
+                        delete (window as any).__INKLESS_DBINFO__;
+                        localStorage.removeItem('inkless:schema');
+                        localStorage.removeItem('inkless:dbinfo');
+                      } catch {}
+                      try {
+                        // Give the host app a chance to handle navigation (App may listen for this)
+                        window.dispatchEvent(
+                          new CustomEvent('inkless:navigate', {
+                            detail: 'welcome',
+                          })
+                        );
+                      } catch {}
+                      // Fallback: refresh. App defaults should render the Welcome view on a clean boot.
+                      window.location.reload();
+                    }}
+                  >
+                    <LogOut className="h-4 w-4" />
+                  </Button>
                   <Button
                     size="icon"
                     variant="outline"
@@ -500,6 +750,21 @@ export default function GraphPage() {
                   >
                     <Crosshair className="h-4 w-4" />
                   </Button>
+                  {selectedId && (
+                    <Button
+                      size="icon"
+                      variant="outline"
+                      className="ml-2 h-9 border-violet-200/60 bg-white/70 px-2 py-0 text-xs leading-none backdrop-blur-sm hover:bg-white/90"
+                      onClick={async () => {
+                        setIsPreviewOpen(true);
+                        await loadPreview(selectedId);
+                      }}
+                      aria-label="Preview first 5 rows"
+                      title="Preview first 5 rows"
+                    >
+                      <Table className="h-4 w-4" />
+                    </Button>
+                  )}
                 </div>
                 {/* Canvas body */}
                 <div className="mx-auto min-h-0 w-full max-w-[1100px] flex-1">

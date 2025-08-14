@@ -123,7 +123,9 @@ fn db_get_rows(path: String, table: String, limit: Option<usize>) -> Result<Rows
     let conn = Connection::open(path).map_err(|e| e.to_string())?;
     let lim = limit.unwrap_or(10);
     // NOTE: table 名は内部利用を想定。外部入力を直接使う場合はエスケープ・バリデーションが必要です。
-    let query = format!("SELECT * FROM {} LIMIT {}", table, lim);
+    // Quote the table identifier to handle special characters and reduce the risk of injection.
+    let escaped_table = table.replace('"', "\"\"");
+    let query = format!("SELECT * FROM \"{}\" LIMIT {}", escaped_table, lim);
     let mut stmt = conn.prepare(&query).map_err(|e| e.to_string())?;
 
     let col_count = stmt.column_count();
@@ -170,9 +172,19 @@ async fn open_sqlite_dialog(window: tauri::Window) -> Option<String> {
     rx.await.ok().flatten()
 }
 
+#[tauri::command]
+async fn inkless_fs_size(path: String) -> Result<u64, String> {
+    // Returns the file size (in bytes) for the given absolute path.
+    // This is used by the UI when a database file is chosen via the OS picker (no File object).
+    use std::fs;
+    fs::metadata(&path)
+        .map(|m| m.len())
+        .map_err(|e| e.to_string())
+}
+
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![db_get_schema, db_get_rows, open_sqlite_dialog])
+        .invoke_handler(tauri::generate_handler![db_get_schema, db_get_rows, open_sqlite_dialog, inkless_fs_size])
         // Optional: enable plugins if you added them in Cargo.toml
         .plugin(tauri_plugin_dialog::init())
         .run(tauri::generate_context!())
