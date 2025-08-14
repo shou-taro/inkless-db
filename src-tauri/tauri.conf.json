@@ -13,8 +13,18 @@
     "windows": [
       {
         "title": "inkless-db",
-        "width": 800,
-        "height": 600
+        "dragDropEnabled": false,
+        "width": 1440,
+        "minWidth": 1280,
+        "height": 900,
+        "minHeight": 800,
+        "center": true,
+        "resizable": true,
+        "maximized": false,
+        "fullscreen": false,
+        "decorations": true,
+        "transparent": false,
+        "visible": true
       }
     ],
     "security": {
