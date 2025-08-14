@@ -12,9 +12,9 @@
   "app": {
     "windows": [
       {
-        "title": "inkless-db",
-        "width": 800,
-        "height": 600
+        "title": "Inkless DB",
+        "width": 1050,
+        "height": 800
       }
     ],
     "security": {
