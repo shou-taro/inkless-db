@@ -41,8 +41,8 @@ import TableNode from '@/components/TableNode';
  * Extracted to avoid magic numbers and scattered hex values.
  * These align with Tailwind tokens configured in tailwind.config.js where possible.
  */
-const SPACING_X = 360; // horizontal gap between table nodes
-const SPACING_Y = 240; // vertical gap between table nodes
+const SPACING_X = 280; // horizontal gap between table nodes (narrower to avoid overly wide diagrams)
+const SPACING_Y = 220; // vertical gap between table nodes (slightly tighter but still readable)
 const FOCUS_OFFSET_X = 120; // centre offset when focusing a node (x)
 const FOCUS_OFFSET_Y = 60; // centre offset when focusing a node (y)
 const FOCUS_ZOOM = 1.1; // zoom level used when focusing a node
@@ -367,7 +367,7 @@ export default function GraphPage() {
   };
 
   return (
-    <div className="h-screen w-screen overflow-hidden bg-gradient-to-br from-violet-50 via-fuchsia-200/50 to-violet-400">
+    <div className="h-screen w-screen overflow-hidden bg-gradient-to-br from-slate-50 via-violet-50 to-slate-100">
       <div className="mx-auto h-full max-w-[1400px] p-6">
         <div className="grid h-full min-w-0 grid-cols-1 gap-4 lg:grid-cols-[260px_1fr]">
           {/* Left: schema browser (extracted) */}
@@ -427,16 +427,16 @@ export default function GraphPage() {
               )}
 
               {/* Canvas panel */}
-              <div className="absolute inset-0 flex flex-col rounded-xl border border-violet-100/60 bg-white/80 p-2 shadow-lg backdrop-blur">
+              <div className="absolute inset-0 flex flex-col rounded-xl border border-violet-200/50 bg-violet-200/70 p-2 shadow-lg backdrop-blur-sm">
                 {/* Header: ER diagram title and DB info */}
                 <div className="flex min-h-[3.25rem] items-center px-2 pb-1">
-                  <span className="mr-4 shrink-0 text-lg font-semibold text-violet-800">
+                  <span className="mr-4 shrink-0 bg-gradient-to-r from-violet-700 via-fuchsia-600 to-violet-700 bg-clip-text text-lg font-semibold text-transparent">
                     ER diagram
                   </span>
-                  <div className="flex min-w-0 items-center gap-2 text-sm text-slate-700">
+                  <div className="flex min-w-0 items-center gap-2 text-sm text-slate-600">
                     {dbInfo?.path ? (
                       <>
-                        <span className="mx-2 text-violet-300">•</span>
+                        <span className="mx-2 text-slate-300">•</span>
                         <span
                           title={dbInfo.path}
                           className="max-w-[44ch] truncate"
@@ -444,13 +444,13 @@ export default function GraphPage() {
                           {dbInfo.path.split(/[\\/]/).pop()}
                         </span>
                         {typeof dbInfo.sizeBytes === 'number' && (
-                          <span className="text-xs text-slate-500">
+                          <span className="text-xs text-slate-500/90">
                             ({formatBytes(dbInfo.sizeBytes)})
                           </span>
                         )}
                       </>
                     ) : (
-                      <span className="rounded border border-dashed border-violet-200 px-2 py-0.5 text-xs text-violet-600">
+                      <span className="rounded border border-dashed border-slate-300 px-2 py-0.5 text-xs text-slate-600">
                         No database loaded
                       </span>
                     )}
@@ -461,7 +461,7 @@ export default function GraphPage() {
                   <Button
                     size="icon"
                     variant="outline"
-                    className="border-violet-200 hover:bg-violet-50"
+                    className="border-violet-200/60 bg-white/70 backdrop-blur-sm hover:bg-white/90"
                     aria-label="Zoom out"
                     onClick={() => rf?.zoomOut?.()}
                   >
@@ -470,7 +470,7 @@ export default function GraphPage() {
                   <Button
                     size="icon"
                     variant="outline"
-                    className="border-violet-200 hover:bg-violet-50"
+                    className="border-violet-200/60 bg-white/70 backdrop-blur-sm hover:bg-white/90"
                     aria-label="Zoom in"
                     onClick={() => rf?.zoomIn?.()}
                   >
@@ -479,7 +479,7 @@ export default function GraphPage() {
                   <Button
                     size="icon"
                     variant="outline"
-                    className="border-violet-200 hover:bg-violet-50"
+                    className="border-violet-200/60 bg-white/70 backdrop-blur-sm hover:bg-white/90"
                     aria-label="Fit view"
                     onClick={() => rf?.fitView?.({ duration: 300 })}
                   >
@@ -488,7 +488,7 @@ export default function GraphPage() {
                   <Button
                     size="icon"
                     variant="outline"
-                    className="border-violet-200 hover:bg-violet-50"
+                    className="border-violet-200/60 bg-white/70 backdrop-blur-sm hover:bg-white/90"
                     aria-label="Centre selected"
                     onClick={() => selectedId && focusNode(selectedId)}
                     disabled={!selectedId}
@@ -502,12 +502,7 @@ export default function GraphPage() {
                   </Button>
                 </div>
                 {/* Canvas body */}
-                <div className="min-h-0 w-full flex-1">
-                  {nodes.length === 0 && (
-                    <div className="pointer-events-none absolute inset-x-0 top-[4.5rem] z-10 text-center text-sm text-violet-700/70">
-                      Loading ER diagram…
-                    </div>
-                  )}
+                <div className="mx-auto min-h-0 w-full max-w-[1100px] flex-1">
                   <GraphCanvas
                     nodes={nodes}
                     edges={edges}
@@ -519,7 +514,7 @@ export default function GraphPage() {
                     fitView
                     // Trim default fit padding so diagrams do not appear overly wide.
                     // GraphCanvas should forward this to ReactFlow's `fitViewOptions` internally.
-                    fitViewOptions={{ padding: 0.2 }}
+                    fitViewOptions={{ padding: 0.35 }}
                   />
                 </div>
               </div>

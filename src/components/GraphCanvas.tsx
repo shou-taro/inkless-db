@@ -1,7 +1,6 @@
 import { memo } from 'react';
 import {
   Background,
-  Controls,
   MiniMap,
   ReactFlow,
   type Node,
@@ -42,6 +41,12 @@ import 'reactflow/dist/style.css';
 
 // ---- Visual tokens (keep in sync with tailwind.config.js where relevant) ----
 // (Colours now referenced via CSS variables set on the wrapper)
+//
+// Palette notes (en‑GB)
+// - Edge stroke: violet-500 for sufficient contrast on light tints
+// - Labels: slate-700 for legibility over soft backgrounds
+// - Mini map: violet-200 fill with violet-600 stroke for clear silhouette
+// - Grid lines: a faint violet to aid alignment without visual noise
 
 // Default edge styling used by the canvas. Centralising this keeps edges coherent.
 const DEFAULT_EDGE = {
@@ -107,7 +112,7 @@ function GraphCanvas({
 }: GraphCanvasProps) {
   return (
     <div
-      className={`from-brandPurple-50 relative h-full w-full bg-gradient-to-br via-violet-200 to-violet-300 [--edge-stroke:theme(colors.brandPurpleHoverHex)] [--label-fill:theme(colors.zinc500Hex)] [--minimap-fill:theme(colors.violet100Hex)] [--minimap-stroke:theme(colors.brandPurpleHex)] ${className ?? ''}`}
+      className={`relative h-full w-full bg-violet-100 [--edge-stroke:theme(colors.violet500Hex)] [--grid-color:rgba(124,58,237,0.12)] [--label-fill:theme(colors.slate700Hex)] [--minimap-fill:theme(colors.lilac200Hex)] [--minimap-stroke:theme(colors.lilac600Hex)] ${className ?? ''}`}
     >
       <ReactFlow
         nodes={nodes}
@@ -128,8 +133,8 @@ function GraphCanvas({
         fitView={fitView}
         fitViewOptions={fitViewOptions}
       >
-        {/* Subtle grid helps spatial orientation without visual clutter */}
-        <Background />
+        {/* Subtle grid for spatial guidance; keep type-safe with default variant */}
+        <Background gap={24} size={2} color="var(--grid-color)" />
 
         {/* Overview of the graph; colours use CSS variables set via Tailwind */}
         <MiniMap
@@ -137,11 +142,8 @@ function GraphCanvas({
           zoomable
           nodeStrokeColor={() => 'var(--minimap-stroke)'}
           nodeColor={() => 'var(--minimap-fill)'}
-          maskColor="rgba(0,0,0,0.05)"
+          maskColor="rgba(226, 218, 232, 0.1)"
         />
-
-        {/* Basic zoom/pan controls; keep defaults minimal */}
-        <Controls />
       </ReactFlow>
     </div>
   );

@@ -1,6 +1,58 @@
 import { memo } from 'react';
 import { Handle, Position } from 'reactflow';
 
+// Width estimation helpers
+// We approximate a comfortable node width from the longest column/type labels
+// using an off-screen canvas. If the canvas API is unavailable, we fall back
+// to a conservative average character width to avoid layout thrashing.
+const DEFAULT_FONT =
+  '500 13px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial';
+const AVG_CHAR_WIDTH_PX = 7.2; // safe average for 13px UI fonts
+
+function measureTextPx(text: string, font = DEFAULT_FONT): number {
+  try {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('no 2d context');
+    ctx.font = font;
+    const metrics = ctx.measureText(text);
+    return metrics.width;
+  } catch {
+    return text.length * AVG_CHAR_WIDTH_PX;
+  }
+}
+
+function estimateNodeWidthPx(params: {
+  columnNames: string[];
+  typeNames: string[];
+  baseFont?: string;
+}): number {
+  const { columnNames, typeNames, baseFont = DEFAULT_FONT } = params;
+  const longestCol = columnNames.reduce(
+    (a, b) => (b.length > a.length ? b : a),
+    ''
+  );
+  const longestTyp = typeNames.reduce(
+    (a, b) => (b.length > a.length ? b : a),
+    ''
+  );
+
+  const nameW = measureTextPx(longestCol, baseFont);
+  const typeW = measureTextPx(longestTyp, baseFont);
+
+  // UI allowances: icon gutter, paddings, a small safety margin
+  const ICON_GUTTER = 22; // e.g. key icon / bullet spacing
+  const H_PADDING = 24 * 2; // left + right padding inside the node
+  const SAFETY = 12; // guard against font metric variance
+
+  const target = nameW + ICON_GUTTER + typeW + H_PADDING + SAFETY;
+
+  // Keep within sensible bounds so tiny/huge tables remain readable
+  const MIN_W = 220;
+  const MAX_W = 520;
+  return Math.max(MIN_W, Math.min(MAX_W, Math.round(target)));
+}
+
 /**
  * TableNode
  * ---------
@@ -30,11 +82,18 @@ type Props = { data: TableNodeData };
 
 function TableNodeBase({ data }: Props) {
   const { table } = data;
+  const computedWidth = estimateNodeWidthPx({
+    columnNames: (table.columns ?? []).map((c) => String(c?.name ?? '')),
+    typeNames: (table.columns ?? []).map((c) => String(c?.type ?? '')),
+  });
 
   return (
-    <div className="min-w-[220px] rounded-2xl border bg-white/95 shadow-sm backdrop-blur">
+    <div
+      className="min-w-[220px] rounded-2xl border bg-white/95 shadow-sm backdrop-blur"
+      style={{ width: computedWidth, maxWidth: computedWidth }}
+    >
       {/* Header */}
-      <div className="from-brandPurple-50 rounded-t-2xl bg-gradient-to-r via-violet-200 to-violet-300 px-4 py-2">
+      <div className="rounded-t-2xl bg-violet-200 px-4 py-2">
         <div className="flex items-center justify-between">
           <div className="truncate text-sm font-semibold text-violet-800">
             {table.name}

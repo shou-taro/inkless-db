@@ -93,7 +93,7 @@ export default function SchemaBrowser({
 
   return (
     <aside
-      className={`m-4 flex w-[260px] min-w-[260px] flex-col rounded-lg border-r bg-background shadow-md ${className ?? ''}`.replace(
+      className={`m-4 flex w-[260px] min-w-[260px] flex-col rounded-lg border-r border-purple-200 bg-purple-50 shadow-md ${className ?? ''}`.replace(
         /\bml-2\b/,
         ''
       )}
@@ -101,8 +101,8 @@ export default function SchemaBrowser({
       style={{ height: 'calc(100% - 2rem)' }}
     >
       <div className="flex items-center justify-between p-2.5">
-        <div className="flex items-center gap-2 text-sm font-medium">
-          <TableIcon className="h-4 w-4" />
+        <div className="flex items-center gap-2 text-sm font-medium text-purple-700">
+          <TableIcon className="h-4 w-4 text-purple-700" />
           <span>Tables</span>
         </div>
       </div>
@@ -112,20 +112,20 @@ export default function SchemaBrowser({
       {/* Header: search + create */}
       <div className="flex items-center gap-2 p-2.5">
         <div className="relative grow">
-          <Search className="pointer-events-none absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Search className="pointer-events-none absolute left-2 top-2.5 h-4 w-4 text-purple-400" />
           <Input
             value={query}
             onChange={(e) => onQueryChange(e.target.value)}
             placeholder="Search tables…"
             aria-label="Search tables"
-            className="pl-8"
+            className="border border-purple-300 pl-8 placeholder-purple-400"
           />
         </div>
         <Button
           type="button"
-          variant="brand"
           onClick={onCreate}
           aria-label="Create new table"
+          className="bg-purple-500 text-white hover:bg-purple-600"
         >
           <Plus className="h-4 w-4" />
         </Button>
@@ -148,8 +148,8 @@ export default function SchemaBrowser({
                 <button
                   type="button"
                   onClick={() => onSelect(t.name)}
-                  className={`group flex w-full items-center gap-2 rounded px-3 py-2 text-left transition hover:bg-muted/70 focus:outline-none focus:ring-2 focus:ring-ring ${
-                    isActive ? 'bg-muted/80' : ''
+                  className={`group flex w-full items-center gap-2 rounded px-3 py-2 text-left transition hover:bg-purple-100 focus:outline-none focus:ring-2 focus:ring-ring ${
+                    isActive ? 'bg-purple-200' : ''
                   }`}
                   aria-current={isActive ? 'true' : undefined}
                 >
@@ -158,7 +158,7 @@ export default function SchemaBrowser({
                     <Highlight text={t.name} query={query} />
                   </span>
                   {t.columns && (
-                    <span className="ml-auto rounded bg-secondary px-1.5 text-[10px] leading-5 text-secondary-foreground">
+                    <span className="ml-auto rounded bg-purple-100 px-1.5 text-[10px] leading-5 text-purple-700">
                       {t.columns.length}
                     </span>
                   )}
@@ -173,12 +173,12 @@ export default function SchemaBrowser({
 
       {/* Lightweight detail preview */}
       <div className="space-y-2 p-2.5" aria-live="polite">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <div className="flex items-center gap-2 text-sm text-purple-700">
           <Info className="h-4 w-4" />
           <span>Details</span>
         </div>
         {selectedTable ? (
-          <div className="rounded-md border p-3">
+          <div className="rounded-md border border-purple-200 p-3">
             <div className="mb-1 text-sm font-semibold">
               {selectedTable.name}
             </div>
@@ -194,7 +194,7 @@ export default function SchemaBrowser({
                   >
                     <span className="truncate">{c.name}</span>
                     {c.type && (
-                      <span className="ml-2 shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] leading-4 text-muted-foreground">
+                      <span className="ml-2 shrink-0 rounded bg-purple-100 px-1.5 py-0.5 text-[10px] leading-4 text-purple-700">
                         {c.type}
                       </span>
                     )}
