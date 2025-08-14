@@ -3,6 +3,8 @@
 
 use rusqlite::Connection;
 use serde::Serialize;
+use tauri_plugin_dialog::{DialogExt, FileDialogBuilder};
+use futures::channel::oneshot;
 
 #[derive(Serialize)]
 struct Column {
@@ -153,9 +155,24 @@ fn db_get_rows(path: String, table: String, limit: Option<usize>) -> Result<Rows
     Ok(RowsResult { columns, rows })
 }
 
+#[tauri::command]
+async fn open_sqlite_dialog(window: tauri::Window) -> Option<String> {
+    // Bridge the callback-style API to async via a oneshot channel (non-blocking).
+    let (tx, rx) = oneshot::channel::<Option<String>>();
+
+    FileDialogBuilder::new(window.dialog().clone())
+        .add_filter("SQLite DB", &["sqlite", "db", "sqlite3", "db3"])
+        .pick_file(move |picked| {
+            let path = picked.map(|p| p.to_string());
+            let _ = tx.send(path);
+        });
+
+    rx.await.ok().flatten()
+}
+
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![db_get_schema, db_get_rows])
+        .invoke_handler(tauri::generate_handler![db_get_schema, db_get_rows, open_sqlite_dialog])
         // Optional: enable plugins if you added them in Cargo.toml
         .plugin(tauri_plugin_dialog::init())
         .run(tauri::generate_context!())

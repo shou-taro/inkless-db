@@ -32,7 +32,6 @@ export type DropzoneProps = {
   onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
   resetSelection: () => void;
-  // WelcomePage 側から受け取るフォーマッタ（DRYのため）
   formatBytes: (bytes?: number | null) => string;
 };
 
@@ -111,11 +110,22 @@ export default function Dropzone({
             )}
           </div>
 
+          {/* NOTE (en‑GB): Do not use a <label htmlFor=...> here, as it would also trigger the hidden
+              <input type="file"> and cause two file pickers (native + OS dialog). We exclusively
+              call onBrowseClick() to open the OS picker on desktop. */}
           <div className="mt-5 flex items-center gap-2">
-            <Button asChild type="button" variant="brand">
-              <label htmlFor={inputId} onClick={onBrowseClick}>
-                Choose another file
-              </label>
+            <Button
+              type="button"
+              variant="brand"
+              onClick={(e) => {
+                // Desktop flow: open the OS picker only; do not trigger the hidden input.
+                e.preventDefault();
+                e.stopPropagation();
+                onBrowseClick();
+              }}
+              aria-label="Choose another file"
+            >
+              Choose another file
             </Button>
             <Button
               type="button"
@@ -143,10 +153,22 @@ export default function Dropzone({
             Choosing a file will not modify its contents; it simply opens the
             database read-only at first.
           </p>
-          <Button asChild type="button" variant="brand" className="mt-3">
-            <label htmlFor={inputId} onClick={onBrowseClick}>
-              Choose file
-            </label>
+
+          {/* NOTE (en‑GB): Do not use a <label htmlFor=...> here, as it would also trigger the hidden
+              <input type="file"> and cause two file pickers (native + OS dialog). We exclusively
+              call onBrowseClick() to open the OS picker on desktop. */}
+          <Button
+            type="button"
+            variant="brand"
+            className="mt-3"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onBrowseClick();
+            }}
+            aria-label="Choose file"
+          >
+            Choose file
           </Button>
         </>
       )}
@@ -161,6 +183,8 @@ export default function Dropzone({
         accept=".sqlite,.db"
         className="hidden"
         tabIndex={-1}
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           if (e.key === 'Backspace' || e.key === 'Delete') {
             e.preventDefault();

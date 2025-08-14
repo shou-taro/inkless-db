@@ -44,6 +44,7 @@ import { useDb } from '@/lib/db/context';
 import { formatBytes } from '@/lib/format';
 import { getBaseName, isAcceptedFileName } from '@/lib/file-utils';
 import Dropzone from '@/components/Dropzone';
+import { invoke } from '@tauri-apps/api/core';
 
 export default function WelcomePage({
   onOpenGraph,
@@ -80,6 +81,7 @@ export default function WelcomePage({
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const openingRef = useRef(false);
   const { connect } = useDb();
 
   const resetSelection = useCallback(() => {
@@ -131,26 +133,31 @@ export default function WelcomePage({
   );
 
   const onBrowseClick = useCallback(async () => {
+    if (openingRef.current) return; // prevent double-open from bubbling/labels
+    openingRef.current = true;
     try {
-      const mod = await import('@tauri-apps/plugin-dialog');
-      const selected = await mod.open({
-        multiple: false,
-        directory: false,
-        filters: [{ name: 'SQLite Database', extensions: ['sqlite', 'db'] }],
-      });
-      if (typeof selected === 'string') {
+      const selected =
+        (await invoke<string | null>('open_sqlite_dialog')) ?? null;
+      if (typeof selected === 'string' && selected.length > 0) {
         await handlePath(selected);
-        return;
       }
-      if (Array.isArray(selected) && selected[0]) {
-        await handlePath(selected[0] as string);
-        return;
-      }
-      return;
-    } catch {
-      fileInputRef.current?.click();
+    } catch (e) {
+      console.error(e);
+      toast.error('Failed to open the OS file picker.');
+    } finally {
+      // small delay to ignore duplicate events from the same user action
+      setTimeout(() => {
+        openingRef.current = false;
+      }, 300);
     }
   }, [handlePath]);
+
+  const noopOnFileChange = useCallback(async () => {
+    // Desktop (Tauri) requires a filesystem path; avoid HTML file input.
+    toast.error(
+      'Please use “Choose…” to pick the database (desktop requires a file path).'
+    );
+  }, []);
 
   const handleFile = useCallback(
     async (f: File) => {
@@ -165,14 +172,6 @@ export default function WelcomePage({
       setSelectedPath(null);
     },
     [resetSelection, showUnsupportedToast]
-  );
-
-  const onFileChange = useCallback(
-    async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const f = e.target.files?.[0];
-      if (f) await handleFile(f);
-    },
-    [handleFile]
   );
 
   const onDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
@@ -262,10 +261,10 @@ export default function WelcomePage({
                       onDragLeave={onDragLeave}
                       onDrop={onDrop}
                       onBrowseClick={onBrowseClick}
-                      onFileChange={onFileChange}
-                      fileInputRef={fileInputRef}
                       resetSelection={resetSelection}
                       formatBytes={formatBytes}
+                      onFileChange={noopOnFileChange}
+                      fileInputRef={fileInputRef}
                     />
                   </div>
                 </CardContent>
