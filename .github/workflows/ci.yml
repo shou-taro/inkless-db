@@ -19,9 +19,14 @@ jobs:
 
       # Install the required Rust toolchain
       - name: Setup Rust (stable)
-        uses: actions/setup-rust@v1
+        uses: dtolnay/rust-toolchain@stable
+
+      # Cache Cargo builds
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
         with:
-          rust-version: stable
+          workspaces: |
+            src-tauri -> target
 
       # Install required system packages for building Tauri
       - name: Install Tauri system dependencies
