@@ -28,7 +28,11 @@
  */
 // --- Drag state utilities (kept outside the component to avoid re-creation) ---
 type DragState = { depth: number; dragging: boolean };
-type DragAction = { type: 'enter' } | { type: 'leave' } | { type: 'drop' } | { type: 'reset' };
+type DragAction =
+  | { type: 'enter' }
+  | { type: 'leave' }
+  | { type: 'drop' }
+  | { type: 'reset' };
 
 function dragReducer(state: DragState, action: DragAction): DragState {
   switch (action.type) {
@@ -49,7 +53,10 @@ function dragReducer(state: DragState, action: DragAction): DragState {
 }
 
 // Normalises DOM drag events
-const stopEvent = (e: Event | React.DragEvent) => { e.preventDefault(); e.stopPropagation(); };
+const stopEvent = (e: Event | React.DragEvent) => {
+  e.preventDefault();
+  // Do NOT stopPropagation so OS-level file-drop can still bubble to Tauri
+};
 
 import { useEffect, useState, useCallback, useReducer, useRef } from 'react';
 import {
@@ -66,12 +73,19 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Toaster, toast } from 'sonner';
 import { formatBytes } from '@/lib/format';
-import { getBaseName, isAcceptedFileName } from '@/lib/file-utils';
+import { isAcceptedFileName } from '@/lib/file-utils';
 import Dropzone from '@/components/Dropzone';
 import { useConnection } from '@/store/connection';
-import { openSqliteDialog, openConnection } from '@/lib/db/tauri';
-import { writeFile, mkdir, exists } from '@tauri-apps/plugin-fs';
-import { join, tempDir } from '@tauri-apps/api/path';
+import {
+  openSqliteDialog,
+  openConnection,
+  beginSecurityScopedAccess,
+  endSecurityScopedAccess,
+  copyToTemp,
+} from '@/lib/tauri';
+import type { Event as TauriEvent } from '@tauri-apps/api/event';
+import { getCurrentWindow, type DragDropEvent } from '@tauri-apps/api/window';
+const appWindow = getCurrentWindow();
 
 export default function WelcomePage({
   onOpenGraph,
@@ -79,9 +93,13 @@ export default function WelcomePage({
   onOpenGraph: () => void;
 }) {
   const [sqlitePath, setSqlitePath] = useState('');
-  const [drag, dispatchDrag] = useReducer(dragReducer, { depth: 0, dragging: false });
+  const [drag, dispatchDrag] = useReducer(dragReducer, {
+    depth: 0,
+    dragging: false,
+  });
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const openingRef = useRef(false);
+  const scopeOpeningRef = useRef(false);
   const { setConnection } = useConnection();
 
   const resetSelection = useCallback(() => {
@@ -101,16 +119,6 @@ export default function WelcomePage({
     []
   );
 
-  // Prevent the browser from hijacking file drops (helps avoid accidental navigation).
-  useEffect(() => {
-    window.addEventListener('dragover', stopEvent);
-    window.addEventListener('drop', stopEvent);
-    return () => {
-      window.removeEventListener('dragover', stopEvent);
-      window.removeEventListener('drop', stopEvent);
-    };
-  }, []);
-
   const handlePath = useCallback(
     async (path: string) => {
       if (!isAcceptedFileName(path)) {
@@ -118,17 +126,54 @@ export default function WelcomePage({
         showUnsupportedToast();
         return;
       }
-      const name = getBaseName(path);
-      setSqlitePath(name);
+      setSqlitePath(path);
       setSelectedPath(path);
     },
     [resetSelection, showUnsupportedToast]
   );
 
+  // Prefer Tauri's OS-level drag & drop API in Tauri v2
+  useEffect(() => {
+    // Prevent browser navigation on file drops but do not stop propagation.
+    const preventNav = (e: Event) => {
+      e.preventDefault();
+    };
+    window.addEventListener('dragover', preventNav);
+    window.addEventListener('drop', preventNav);
+
+    let unlisten: (() => void) | undefined;
+
+    appWindow
+      .onDragDropEvent((event: TauriEvent<DragDropEvent>) => {
+        const e = event.payload;
+        if (e.type === 'enter') {
+          dispatchDrag({ type: 'enter' });
+        } else if (e.type === 'over') {
+          dispatchDrag({ type: 'enter' });
+        } else if (e.type === 'drop') {
+          const first = Array.isArray(e.paths) ? e.paths[0] : undefined;
+          if (first) handlePath(first);
+          dispatchDrag({ type: 'drop' });
+        } else if (e.type === 'leave') {
+          dispatchDrag({ type: 'reset' });
+        }
+      })
+      .then((un) => {
+        unlisten = un;
+      });
+
+    return () => {
+      window.removeEventListener('dragover', preventNav);
+      window.removeEventListener('drop', preventNav);
+      if (unlisten) unlisten();
+    };
+  }, [handlePath]);
+
   const onBrowseClick = useCallback(async () => {
     if (openingRef.current) return; // prevent double-open from bubbling/labels
     openingRef.current = true;
     try {
+      // NOTE: openSqliteDialog should enable security-scoped access on macOS.
       const selected = await openSqliteDialog();
       if (typeof selected === 'string' && selected.length > 0) {
         await handlePath(selected);
@@ -143,37 +188,6 @@ export default function WelcomePage({
       }, 300);
     }
   }, [handlePath]);
-
-  const ensureDir = useCallback(async (folder: string) => {
-    if (!(await exists(folder))) {
-      await mkdir(folder, { recursive: true });
-    }
-  }, []);
-
-  const handleFile = useCallback(
-    async (f: File) => {
-      try {
-        if (!isAcceptedFileName(f.name)) {
-          resetSelection();
-          showUnsupportedToast();
-          return;
-        }
-        const buf = new Uint8Array(await f.arrayBuffer());
-        const tmp = await tempDir();
-        const folder = await join(tmp, 'inkless-db');
-        await ensureDir(folder);
-        const target = await join(folder, `${Date.now()}-${f.name}`);
-        await writeFile(target, buf);
-        setSqlitePath(getBaseName(f.name));
-        setSelectedPath(target);
-      } catch (e) {
-        console.error(e);
-        resetSelection();
-        toast.error('Failed to process the dropped file. Please use Browse instead.');
-      }
-    },
-    [resetSelection, showUnsupportedToast, ensureDir]
-  );
 
   const onDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     stopEvent(e);
@@ -190,13 +204,70 @@ export default function WelcomePage({
     dispatchDrag({ type: 'leave' });
   }, []);
 
-  const onDrop = useCallback(async (e: React.DragEvent<HTMLDivElement>) => {
-    stopEvent(e);
+  const onDrop = useCallback((_: React.DragEvent<HTMLDivElement>) => {
+    // Do not preventDefault/stopPropagation here; let Tauri deliver tauri://file-drop with real paths.
     dispatchDrag({ type: 'drop' });
-    const list = e.dataTransfer?.files;
-    const f = list && list.length > 0 ? list[0] : undefined;
-    if (f) await handleFile(f);
-  }, [handleFile]);
+  }, []);
+
+  // Helper for robust open: try original, fallback to temp-copy if needed
+  const openWithFallback = useCallback(async () => {
+    if (!selectedPath) {
+      toast.error('Please select a SQLite file via Browse or file drop.');
+      return;
+    }
+    if (scopeOpeningRef.current) return;
+    scopeOpeningRef.current = true;
+
+    let scopeId: string | null = null;
+    let lastErr: unknown = null;
+    try {
+      try {
+        // Try security-scoped open of the original file
+        try {
+          scopeId = await beginSecurityScopedAccess(selectedPath);
+        } catch (e) {
+          console.warn(
+            'beginSecurityScopedAccess failed; attempting open anyway',
+            e
+          );
+        }
+        const connId = await openConnection('sqlite', selectedPath);
+        setConnection(connId, 'Sqlite');
+        onOpenGraph();
+        return; // success
+      } catch (e) {
+        lastErr = e;
+        console.warn(
+          'Open original failed, attempting temp-copy fallback...',
+          e
+        );
+      } finally {
+        if (scopeId) {
+          try {
+            await endSecurityScopedAccess(scopeId);
+          } catch {}
+        }
+      }
+
+      // Fallback: copy to temp via backend command (no frontend fs permissions needed)
+      const target = await copyToTemp(selectedPath);
+      const connId = await openConnection('sqlite', target);
+      setConnection(connId, 'Sqlite');
+      toast.warning(
+        'Opened a temporary copy. Changes may not be written back to the original.'
+      );
+      onOpenGraph();
+    } catch (e: any) {
+      console.error(e);
+      const msg =
+        e?.message || String(e || lastErr) || 'Failed to open the database.';
+      toast.error(msg);
+    } finally {
+      setTimeout(() => {
+        scopeOpeningRef.current = false;
+      }, 300);
+    }
+  }, [selectedPath, setConnection, onOpenGraph]);
 
   return (
     <div className="flex h-screen flex-row items-center justify-center">
@@ -264,19 +335,7 @@ export default function WelcomePage({
                     type="button"
                     variant="brand"
                     disabled={!sqlitePath}
-                    onClick={async () => {
-                      try {
-                        if (selectedPath) {
-                          const connId = await openConnection('Sqlite', selectedPath);
-                          setConnection(connId, 'Sqlite');
-                          onOpenGraph();
-                          return;
-                        }
-                        toast.error('Please select a SQLite file via Browse.');
-                      } catch (e) {
-                        toast.error('Failed to open the database.');
-                      }
-                    }}
+                    onClick={openWithFallback}
                   >
                     Open
                   </Button>
