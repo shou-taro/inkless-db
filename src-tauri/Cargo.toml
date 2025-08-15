@@ -7,21 +7,36 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[lib]
-# The `_lib` suffix may seem redundant but it is necessary
-# to make the lib name unique and wouldn't conflict with the bin name.
-# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "inkless_db_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
-
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+# --- Tauri core ---
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
+
+# --- Async runtime & utils ---
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+futures = "0.3"
+anyhow = "1"
+
+# --- Serde ---
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rusqlite = { version = "0.31", features = ["bundled"] }
-futures = "0.3"
+
+# --- DB stack ---
+# Remove rusqlite; we now use sqlx for SQLite/Postgres/MySQL
+sqlx = { version = "0.7", features = [
+  "runtime-tokio-rustls",
+  "sqlite",
+  "postgres",
+  "mysql"
+] }
+sea-query = "0.30"
+sea-query-binder = { version = "0.5", features = [
+  "sqlx-sqlite",
+  "sqlx-postgres",
+  "sqlx-mysql"
+] }
+base64 = "0.22"

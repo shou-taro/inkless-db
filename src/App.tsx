@@ -13,7 +13,7 @@ export default function App() {
         {view === 'welcome' ? (
           <WelcomePage onOpenGraph={() => setView('graph')} />
         ) : (
-          <GraphPage />
+          <GraphPage onExit={() => setView('welcome')} />
         )}
       </main>
     </div>

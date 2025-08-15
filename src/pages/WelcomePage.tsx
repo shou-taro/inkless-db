@@ -26,7 +26,32 @@
  *   prevent the browser from navigating away when a file is dropped outside
  *   the intended target.
  */
-import { useEffect, useRef, useState, useCallback, useReducer } from 'react';
+// --- Drag state utilities (kept outside the component to avoid re-creation) ---
+type DragState = { depth: number; dragging: boolean };
+type DragAction = { type: 'enter' } | { type: 'leave' } | { type: 'drop' } | { type: 'reset' };
+
+function dragReducer(state: DragState, action: DragAction): DragState {
+  switch (action.type) {
+    case 'enter': {
+      const depth = state.depth + 1;
+      return { depth, dragging: true };
+    }
+    case 'leave': {
+      const depth = Math.max(0, state.depth - 1);
+      return { depth, dragging: depth > 0 };
+    }
+    case 'drop':
+    case 'reset':
+      return { depth: 0, dragging: false };
+    default:
+      return state;
+  }
+}
+
+// Normalises DOM drag events
+const stopEvent = (e: Event | React.DragEvent) => { e.preventDefault(); e.stopPropagation(); };
+
+import { useEffect, useState, useCallback, useReducer, useRef } from 'react';
 import {
   Card,
   CardContent,
@@ -40,11 +65,13 @@ import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Toaster, toast } from 'sonner';
-import { useDb } from '@/lib/db/context';
 import { formatBytes } from '@/lib/format';
 import { getBaseName, isAcceptedFileName } from '@/lib/file-utils';
 import Dropzone from '@/components/Dropzone';
-import { invoke } from '@tauri-apps/api/core';
+import { useConnection } from '@/store/connection';
+import { openSqliteDialog, openConnection } from '@/lib/db/tauri';
+import { writeFile, mkdir, exists } from '@tauri-apps/plugin-fs';
+import { join, tempDir } from '@tauri-apps/api/path';
 
 export default function WelcomePage({
   onOpenGraph,
@@ -52,43 +79,14 @@ export default function WelcomePage({
   onOpenGraph: () => void;
 }) {
   const [sqlitePath, setSqlitePath] = useState('');
-  type DragState = { depth: number; dragging: boolean };
-  type DragAction =
-    | { type: 'enter' }
-    | { type: 'leave' }
-    | { type: 'drop' }
-    | { type: 'reset' };
-  const [drag, dispatchDrag] = useReducer(
-    (state: DragState, action: DragAction): DragState => {
-      switch (action.type) {
-        case 'enter': {
-          const depth = state.depth + 1;
-          return { depth, dragging: true };
-        }
-        case 'leave': {
-          const depth = Math.max(0, state.depth - 1);
-          return { depth, dragging: depth > 0 };
-        }
-        case 'drop':
-        case 'reset':
-          return { depth: 0, dragging: false };
-        default:
-          return state;
-      }
-    },
-    { depth: 0, dragging: false }
-  );
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [drag, dispatchDrag] = useReducer(dragReducer, { depth: 0, dragging: false });
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const openingRef = useRef(false);
-  const { connect } = useDb();
+  const { setConnection } = useConnection();
 
   const resetSelection = useCallback(() => {
     setSqlitePath('');
-    setSelectedFile(null);
     setSelectedPath(null);
-    if (fileInputRef.current) fileInputRef.current.value = '';
   }, []);
 
   const showUnsupportedToast = useCallback(
@@ -105,15 +103,11 @@ export default function WelcomePage({
 
   // Prevent the browser from hijacking file drops (helps avoid accidental navigation).
   useEffect(() => {
-    const stop = (e: DragEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-    };
-    window.addEventListener('dragover', stop);
-    window.addEventListener('drop', stop);
+    window.addEventListener('dragover', stopEvent);
+    window.addEventListener('drop', stopEvent);
     return () => {
-      window.removeEventListener('dragover', stop);
-      window.removeEventListener('drop', stop);
+      window.removeEventListener('dragover', stopEvent);
+      window.removeEventListener('drop', stopEvent);
     };
   }, []);
 
@@ -127,7 +121,6 @@ export default function WelcomePage({
       const name = getBaseName(path);
       setSqlitePath(name);
       setSelectedPath(path);
-      setSelectedFile(null);
     },
     [resetSelection, showUnsupportedToast]
   );
@@ -136,8 +129,7 @@ export default function WelcomePage({
     if (openingRef.current) return; // prevent double-open from bubbling/labels
     openingRef.current = true;
     try {
-      const selected =
-        (await invoke<string | null>('open_sqlite_dialog')) ?? null;
+      const selected = await openSqliteDialog();
       if (typeof selected === 'string' && selected.length > 0) {
         await handlePath(selected);
       }
@@ -152,51 +144,59 @@ export default function WelcomePage({
     }
   }, [handlePath]);
 
-  const handleFile = useCallback(
-    async (f: File) => {
-      const name = f.name || '';
-      if (!isAcceptedFileName(name)) {
-        resetSelection();
-        showUnsupportedToast();
-        return;
-      }
-      setSqlitePath(name);
-      setSelectedFile(f);
-      setSelectedPath(null);
-    },
-    [resetSelection, showUnsupportedToast]
-  );
-
-  const onDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.dataTransfer) {
-      e.dataTransfer.dropEffect = 'copy';
+  const ensureDir = useCallback(async (folder: string) => {
+    if (!(await exists(folder))) {
+      await mkdir(folder, { recursive: true });
     }
   }, []);
 
+  const handleFile = useCallback(
+    async (f: File) => {
+      try {
+        if (!isAcceptedFileName(f.name)) {
+          resetSelection();
+          showUnsupportedToast();
+          return;
+        }
+        const buf = new Uint8Array(await f.arrayBuffer());
+        const tmp = await tempDir();
+        const folder = await join(tmp, 'inkless-db');
+        await ensureDir(folder);
+        const target = await join(folder, `${Date.now()}-${f.name}`);
+        await writeFile(target, buf);
+        setSqlitePath(getBaseName(f.name));
+        setSelectedPath(target);
+      } catch (e) {
+        console.error(e);
+        resetSelection();
+        toast.error('Failed to process the dropped file. Please use Browse instead.');
+      }
+    },
+    [resetSelection, showUnsupportedToast, ensureDir]
+  );
+
+  const onDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    stopEvent(e);
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  }, []);
+
   const onDragEnter = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
+    stopEvent(e);
     dispatchDrag({ type: 'enter' });
   }, []);
 
   const onDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
+    stopEvent(e);
     dispatchDrag({ type: 'leave' });
   }, []);
 
-  const onDrop = useCallback(
-    async (e: React.DragEvent<HTMLDivElement>) => {
-      e.preventDefault();
-      e.stopPropagation();
-      dispatchDrag({ type: 'drop' });
-      const f = e.dataTransfer.files?.[0];
-      if (f) await handleFile(f);
-    },
-    [handleFile]
-  );
+  const onDrop = useCallback(async (e: React.DragEvent<HTMLDivElement>) => {
+    stopEvent(e);
+    dispatchDrag({ type: 'drop' });
+    const list = e.dataTransfer?.files;
+    const f = list && list.length > 0 ? list[0] : undefined;
+    if (f) await handleFile(f);
+  }, [handleFile]);
 
   return (
     <div className="flex h-screen flex-row items-center justify-center">
@@ -267,19 +267,12 @@ export default function WelcomePage({
                     onClick={async () => {
                       try {
                         if (selectedPath) {
-                          await connect({ kind: 'sqlite', path: selectedPath });
+                          const connId = await openConnection('Sqlite', selectedPath);
+                          setConnection(connId, 'Sqlite');
                           onOpenGraph();
                           return;
                         }
-                        const f =
-                          selectedFile ??
-                          fileInputRef.current?.files?.[0] ??
-                          null;
-                        if (f) {
-                          await connect({ kind: 'sqlite', file: f });
-                          onOpenGraph();
-                          return;
-                        }
+                        toast.error('Please select a SQLite file via Browse.');
                       } catch (e) {
                         toast.error('Failed to open the database.');
                       }

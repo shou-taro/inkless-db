@@ -1,15 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { formatBytes } from '@/lib/format';
-import { useDb } from '@/lib/db/context';
-// Tauri's invoke is optional; we guard calls in case we're running in a non‑Tauri context.
-let tauriInvoke:
-  | undefined
-  | ((cmd: string, args?: Record<string, any>) => Promise<any>);
-try {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  // @ts-ignore – optional dependency in web preview
-  tauriInvoke = require('@tauri-apps/api/tauri').invoke as typeof tauriInvoke;
-} catch {}
+import { useConnection } from '@/store/connection';
+import { getSchema, type DatabaseSchema } from '@/lib/db/tauri';
 import {
   Node,
   Edge,
@@ -36,7 +27,6 @@ import {
   Crosshair,
   Table,
   FileText,
-  Clipboard,
   LogOut,
 } from 'lucide-react';
 
@@ -57,6 +47,8 @@ const FOCUS_OFFSET_Y = 60; // centre offset when focusing a node (y)
 const FOCUS_ZOOM = 1.1; // zoom level used when focusing a node
 const FOCUS_DURATION_MS = 300; // animation duration for focus transitions
 
+// Types for schema: derived from backend schema, adapted minimally for view model here.
+// These types are still used for the UI, but are populated from DatabaseSchema.
 type Column = {
   name: string;
   type: string;
@@ -83,31 +75,7 @@ type Schema = {
   fks: ForeignKey[];
 };
 
-type DbInfo = {
-  path: string;
-  sizeBytes?: number;
-};
-
 type PreviewResult = { columns: string[]; rows: any[] };
-
-// Optional globals populated by WelcomePage after selecting a SQLite file.
-declare global {
-  interface Window {
-    __INKLESS_DBINFO__?: DbInfo;
-    __INKLESS_SCHEMA__?: Schema;
-  }
-}
-
-// Optional bridge provided by WelcomePage/client layer.
-// It may expose async getters for the currently opened DB.
-declare global {
-  interface Window {
-    inklessClient?: {
-      getSchema?: () => Promise<Schema | null>;
-      getDbInfo?: () => Promise<DbInfo | null>;
-    };
-  }
-}
 
 // Define nodeTypes at module scope so the object identity stays stable across renders.
 const nodeTypes = { table: TableNode };
@@ -136,170 +104,47 @@ function schemaToFlow(schema: Schema) {
   return { nodes, edges };
 }
 
-export default function GraphPage() {
+export default function GraphPage({ onExit }: { onExit: () => void }) {
   // Active schema initially seeded as empty, replaced if a real SQLite file is opened.
   const [activeSchema, setActiveSchema] = useState<Schema>({
     tables: [],
     fks: [],
   });
-  const [dbInfo, setDbInfo] = useState<DbInfo | null>(null);
+  const { state, clearConnection } = useConnection();
 
-  // Central DB context (WelcomePage controls connection lifecycle)
-  const dbCtx = useDb();
-
-  // Initialise from (priority): WelcomePage client bridge -> WelcomePage globals -> localStorage -> Tauri -> demo
-  useMemo(() => {
-    (async () => {
-      // 0) Prefer the WelcomePage client bridge if available
-      if (window.inklessClient?.getSchema || window.inklessClient?.getDbInfo) {
-        try {
-          const [bSchema, bInfo] = await Promise.all([
-            window.inklessClient?.getSchema?.() ?? Promise.resolve(null),
-            window.inklessClient?.getDbInfo?.() ?? Promise.resolve(null),
-          ]);
-          if (bSchema && Array.isArray(bSchema.tables)) {
-            setActiveSchema(bSchema);
-          }
-          if (bInfo && bInfo.path) {
-            setDbInfo(bInfo);
-          }
-          if (bSchema || bInfo) return; // initialised via bridge
-        } catch (e) {
-          console.warn('WelcomePage bridge failed, falling back.', e);
-        }
-      }
-
-      try {
-        // 1) WelcomePage may have placed schema/dbinfo on window after selection
-        if (
-          window.__INKLESS_SCHEMA__ &&
-          Array.isArray(window.__INKLESS_SCHEMA__.tables)
-        ) {
-          setActiveSchema(window.__INKLESS_SCHEMA__);
-        }
-        if (window.__INKLESS_DBINFO__ && window.__INKLESS_DBINFO__.path) {
-          setDbInfo(window.__INKLESS_DBINFO__);
-        }
-        if (window.__INKLESS_SCHEMA__ || window.__INKLESS_DBINFO__) return; // already initialised
-
-        // 2) Fallback: localStorage (WelcomePage can persist here)
-        try {
-          const s = localStorage.getItem('inkless:schema');
-          if (s) {
-            const parsed = JSON.parse(s) as Schema;
-            if (parsed && Array.isArray(parsed.tables)) setActiveSchema(parsed);
-          }
-          const d = localStorage.getItem('inkless:dbinfo');
-          if (d) {
-            const parsed = JSON.parse(d) as DbInfo;
-            if (parsed && parsed.path) setDbInfo(parsed);
-          }
-          if (s || d) return; // obtained from storage
-        } catch {}
-
-        // 3) Desktop: ask Tauri backend
-        if (tauriInvoke) {
-          const info = (await tauriInvoke(
-            'inkless_get_sqlite_info'
-          )) as DbInfo | null;
-          if (info && info.path) setDbInfo(info);
-          const schema = (await tauriInvoke(
-            'inkless_introspect_sqlite_schema'
-          )) as Schema | null;
-          if (schema && Array.isArray(schema.tables)) setActiveSchema(schema);
-          return;
-        }
-
-        // 4) Otherwise: leave schema empty
-      } catch (err) {
-        console.warn(
-          'Failed to initialise schema from WelcomePage/Tauri; leaving schema empty.',
-          err
-        );
-      }
-    })();
-  }, []);
-
-  // When a client is available from the context, ask it for the real schema & db meta.
   useEffect(() => {
     let cancelled = false;
-    const fetchFromClient = async () => {
-      // Debug: observe current context state before applying guards
-      const conn: any = dbCtx?.connection;
-      const hasPath = Boolean(conn?.path);
-      const hasClient = Boolean(dbCtx?.client);
-      if (!hasPath || !hasClient) {
-        console.info('[DBG] skip fetchFromClient (tauri requires path):', {
-          hasPath,
-          hasClient,
-        });
+    (async () => {
+      if (!state.connId) {
+        // No active connection; notify parent to exit
+        onExit();
         return;
       }
       try {
-        const c: any = dbCtx?.client;
-        if (!c) return;
-        // Prefer async getters if implemented by the client
-        const [s, info] = await Promise.all([
-          typeof c.getSchema === 'function'
-            ? c.getSchema()
-            : Promise.resolve(c.schema ?? null),
-          typeof c.getDbInfo === 'function'
-            ? c.getDbInfo()
-            : Promise.resolve(c.dbInfo ?? c.info ?? c.meta ?? null),
-        ]);
-
-        if (!cancelled) {
-          if (s && Array.isArray(s.tables)) setActiveSchema(s);
-          if (info && info.path) setDbInfo(info);
-        }
-      } catch (e: any) {
-        const msg = String(e?.message || e);
-        // Quietly ignore readiness errors until the connection provides a source.
-        if (/path is required/i.test(msg)) {
-          return; // no log; effect will re-run when connection changes
-        }
-        // Log unexpected failures for diagnosis.
-        console.warn(
-          'Failed to fetch from DbClient; keeping current state.',
-          e
+        const raw: DatabaseSchema = await getSchema(state.connId);
+        if (cancelled) return;
+        // Adapt backend schema to the view model expected by this page
+        const tables = raw.tables.map((t) => ({
+          name: t.name,
+          columns: t.columns.map((c) => ({
+            name: c.name,
+            type: c.data_type,
+            isPrimary: !!c.is_pk,
+          })),
+        }));
+        const fks: ForeignKey[] = raw.tables.flatMap((t) =>
+          (t.foreign_keys ?? []).map((fk) => ({
+            from: { table: t.name, column: fk.from },
+            to: { table: fk.to_table, column: fk.to },
+          }))
         );
+        setActiveSchema({ tables, fks });
+      } catch (e) {
+        console.error('Failed to load schema:', e);
       }
-    };
-    fetchFromClient();
-    return () => {
-      cancelled = true;
-    };
-  }, [dbCtx?.client, dbCtx?.connection]);
-
-  // Observe DbContext transitions (helps confirm WelcomePage -> Provider updates)
-  useEffect(() => {
-    // Expose for ad-hoc inspection from DevTools
-    (window as any).__DBG_DBCTX__ = dbCtx;
-  }, [dbCtx]);
-
-  // Derive minimal dbInfo from the active connection so the header shows immediately.
-  useEffect(() => {
-    const conn: any = dbCtx?.connection;
-    if (!conn) return;
-    const path: string | undefined = conn.path;
-    if (!path) return;
-
-    setDbInfo((prev) => ({
-      path,
-      sizeBytes: prev?.sizeBytes,
-    }));
-
-    // On Tauri, fetch richer info (size, etc.) once available.
-    if (tauriInvoke) {
-      tauriInvoke('inkless_get_sqlite_info')
-        .then((info: any) => {
-          if (info && info.path) setDbInfo(info);
-        })
-        .catch(() => {
-          /* ignore – we already show the basic path */
-        });
-    }
-  }, [dbCtx?.connection]);
+    })();
+    return () => { cancelled = true; };
+  }, [state.connId, state, onExit]);
 
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [newTableName, setNewTableName] = useState('new_table');
@@ -349,20 +194,7 @@ export default function GraphPage() {
     setPreviewError(null);
     setPreview(null);
     try {
-      const client: any = dbCtx?.client;
-      if (!client || typeof client.getRows !== 'function') {
-        throw new Error('Row preview is not available for this connection.');
-      }
-      const res = await client.getRows(tableName, 5);
-      if (!res || !Array.isArray(res.rows)) {
-        throw new Error('Unexpected response from db_get_rows.');
-      }
-      const cols = Array.isArray(res.columns)
-        ? res.columns
-        : res.rows[0]
-          ? Object.keys(res.rows[0])
-          : [];
-      setPreview({ columns: cols, rows: res.rows });
+      throw new Error('Row preview is not available for this connection yet.');
     } catch (e: any) {
       setPreviewError(String(e?.message || e));
     } finally {
@@ -541,39 +373,15 @@ export default function GraphPage() {
 
                     {/* File info pill now sits next to the title, avoiding overlap with the right toolbar */}
                     <div className="ml-3 flex min-w-0 items-center gap-1.5 rounded-full border border-violet-200/60 bg-white/70 px-2 py-1 shadow-sm backdrop-blur-sm">
-                      {dbInfo?.path ? (
+                      {state.connId ? (
                         <>
                           <FileText
                             className="h-4 w-4 shrink-0 text-violet-700"
                             aria-hidden
                           />
-                          <span
-                            title={dbInfo.path}
-                            className="min-w-0 max-w-[52ch] truncate text-sm text-slate-700"
-                          >
-                            {dbInfo.path.split(/[\\/]/).pop()}
+                          <span className="min-w-0 max-w-[52ch] truncate text-sm text-slate-700">
+                            Connected
                           </span>
-                          {typeof dbInfo.sizeBytes === 'number' && (
-                            <span className="ml-2 shrink-0 rounded bg-violet-100 px-1.5 py-0.5 text-xs font-medium text-violet-700">
-                              {formatBytes(dbInfo.sizeBytes)}
-                            </span>
-                          )}
-                          <Button
-                            type="button"
-                            size="icon"
-                            variant="ghost"
-                            className="ml-1 h-7 w-7 shrink-0 text-slate-600 hover:text-slate-900"
-                            onClick={() => {
-                              try {
-                                if (dbInfo?.path)
-                                  navigator.clipboard?.writeText(dbInfo.path);
-                              } catch {}
-                            }}
-                            aria-label="Copy file path"
-                            title="Copy file path"
-                          >
-                            <Clipboard className="h-4 w-4" />
-                          </Button>
                         </>
                       ) : (
                         <span className="rounded-full border border-dashed border-slate-300 bg-white/60 px-3 py-1 text-xs text-slate-600">
@@ -592,35 +400,8 @@ export default function GraphPage() {
                     aria-label="End session and return to Welcome"
                     title="End session and return to Welcome"
                     onClick={async () => {
-                      try {
-                        // Politely disconnect the shared DbContext if available
-                        dbCtx?.disconnect?.();
-                      } catch {}
-                      try {
-                        // Ask backend (if present) to clear its connection state
-                        if (tauriInvoke) {
-                          try {
-                            await tauriInvoke('inkless_disconnect');
-                          } catch {}
-                        }
-                      } catch {}
-                      try {
-                        // Clear any globals and cached schema/info so we land fresh on Welcome
-                        delete (window as any).__INKLESS_SCHEMA__;
-                        delete (window as any).__INKLESS_DBINFO__;
-                        localStorage.removeItem('inkless:schema');
-                        localStorage.removeItem('inkless:dbinfo');
-                      } catch {}
-                      try {
-                        // Give the host app a chance to handle navigation (App may listen for this)
-                        window.dispatchEvent(
-                          new CustomEvent('inkless:navigate', {
-                            detail: 'welcome',
-                          })
-                        );
-                      } catch {}
-                      // Fallback: refresh. App defaults should render the Welcome view on a clean boot.
-                      window.location.reload();
+                      try { clearConnection(); } catch {}
+                      onExit();
                     }}
                   >
                     <LogOut className="h-4 w-4" />
