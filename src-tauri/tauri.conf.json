@@ -14,7 +14,10 @@
       {
         "title": "Inkless DB",
         "width": 1050,
-        "height": 800
+        "height": 800,
+        "minWidth": 1050,
+        "minHeight": 800,
+        "dragDropEnabled": false
       }
     ],
     "security": {
