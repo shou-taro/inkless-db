@@ -12,6 +12,7 @@
 import React, { useEffect, useId, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Upload, CheckCircle2, FileText } from 'lucide-react';
+import { fileSize } from '@/lib/tauri';
 
 /**
  * Props accepted by the Dropzone component.
@@ -42,7 +43,6 @@ export default function Dropzone({
   onDragEnter,
   onDragOver,
   onDragLeave,
-  onDrop,
   onBrowseClick,
   resetSelection,
   formatBytes,
@@ -62,29 +62,14 @@ export default function Dropzone({
         return;
       }
       try {
-        const w: any = typeof window !== 'undefined' ? window : undefined;
-        if (w && w.__TAURI__ && typeof w.__TAURI__.invoke === 'function') {
-          try {
-            const res = await w.__TAURI__.invoke('inkless_fs_size', {
-              path: sqlitePath,
-            });
-            if (!cancelled) {
-              const bytes =
-                typeof res === 'number'
-                  ? res
-                  : res && typeof res.size === 'number'
-                    ? res.size
-                    : null;
-              setPathSize(bytes);
-            }
-            return;
-          } catch {
-            // Ignore; will leave size unresolved if the command is not available
-          }
+        const size = await fileSize(sqlitePath);
+        if (!cancelled && typeof size === 'number') {
+          setPathSize(size);
+        } else if (!cancelled) {
+          setPathSize(null);
         }
-        if (!cancelled) setPathSize(null);
       } catch {
-        if (!cancelled) setPathSize(null);
+        if (!cancelled) setPathSize(NaN);
       }
     })();
     return () => {
@@ -93,11 +78,12 @@ export default function Dropzone({
   }, [sqlitePath]);
 
   return (
+    // Do NOT bind `onDrop` here. Let Tauri deliver `tauri://file-drop` with real file-system paths.
+    // Binding a DOM drop handler can interfere with OS-level file drop events.
     <div
       onDragEnter={onDragEnter}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
-      onDrop={onDrop}
       role="region"
       aria-label="SQLite file dropzone"
       aria-describedby={descId}
@@ -128,10 +114,14 @@ export default function Dropzone({
           >
             <FileText className="h-4 w-4 opacity-70" aria-hidden="true" />
             <span className="max-w-[420px] truncate font-medium text-foreground">
-              {sqlitePath}
+              {sqlitePath.split(/[/\\]/).pop()}
             </span>
             <span className="ml-2 rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] leading-none text-zinc-700 ring-1 ring-zinc-200">
-              {formatBytes(pathSize ?? 0)}
+              {pathSize === null
+                ? '…'
+                : typeof pathSize === 'number' && !isNaN(pathSize)
+                  ? formatBytes(pathSize)
+                  : 'Unknown'}
             </span>
           </div>
 
