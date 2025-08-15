@@ -190,3 +190,34 @@ pub fn build_delete(spec: &DeleteSpec, dialect: Dialect) -> (String, SqlxValues)
         Dialect::Sqlite   => stmt.build_sqlx(SqliteQueryBuilder),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Dialect;
+
+    #[test]
+    fn build_select_basic_sqlite_sql_shape() {
+        // This test verifies that the SQL string produced by `build_select`
+        // contains the basic expected clauses when using SQLite dialect.
+        let spec = SelectSpec {
+            table: "users".into(),
+            columns: vec!["id".into(), "name".into()],
+            filters: vec![
+                FilterCond { column: "active".into(), op: "=".into(), value: JsonValue::Bool(true) },
+                FilterCond { column: "name".into(), op: "like".into(), value: JsonValue::String("%a%".into()) },
+            ],
+            sort: Some(("id".into(), true)),
+            limit: Some(50),
+            offset: Some(10),
+        };
+
+        let (sql, _values) = super::build_select(&spec, Dialect::Sqlite);
+        // Perform simple shape assertions on the generated SQL
+        assert!(sql.to_lowercase().contains("select"));
+        assert!(sql.contains("users"));
+        assert!(sql.to_lowercase().contains("order by"));
+        assert!(sql.to_lowercase().contains("limit"));
+        assert!(sql.to_lowercase().contains("offset"));
+    }
+}

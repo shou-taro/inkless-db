@@ -293,3 +293,55 @@ async fn inspect_mysql(pool: &Pool<sqlx::MySql>) -> Result<DatabaseSchema> {
         tables,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::DynPool;
+    use sqlx::Executor;
+
+    /// Verifies that `inspect_schema` works for an in-memory SQLite database.
+    #[tokio::test]
+    async fn inspect_sqlite_schema_basic() -> anyhow::Result<()> {
+        // Create an in-memory SQLite pool
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await?;
+
+        // Create a sample table with a foreign key
+        pool.execute(
+            r#"
+            CREATE TABLE parent (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL
+            );
+            "#,
+        )
+        .await?;
+
+        pool.execute(
+            r#"
+            CREATE TABLE child (
+                id INTEGER PRIMARY KEY,
+                parent_id INTEGER NOT NULL,
+                FOREIGN KEY (parent_id) REFERENCES parent(id)
+            );
+            "#,
+        )
+        .await?;
+
+        let dyn_pool = DynPool::Sqlite(pool.clone());
+        let schema = inspect_schema(&dyn_pool).await?;
+
+        assert_eq!(schema.dialect, "sqlite");
+        assert!(schema.tables.iter().any(|t| t.name == "parent"));
+        assert!(schema.tables.iter().any(|t| t.name == "child"));
+
+        // Check foreign key relationship in child table
+        let child_table = schema.tables.iter().find(|t| t.name == "child").unwrap();
+        assert_eq!(child_table.foreign_keys.len(), 1);
+        assert_eq!(child_table.foreign_keys[0].to_table, "parent");
+        Ok(())
+    }
+}

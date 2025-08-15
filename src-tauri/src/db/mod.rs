@@ -576,3 +576,63 @@ async fn schema_mysql(pool: &Pool<sqlx::MySql>) -> Result<Value> {
         "tables": tables
     }))
 }
+
+
+#[cfg(test)]
+mod it_sqlite {
+    use super::*;
+    use crate::db::builder::{build_select, FilterCond, SelectSpec};
+    use crate::db::Dialect;
+
+    /// Integration-style test for the SQLite path:
+    /// build a query with SeaQuery, execute via `execute_sql_with_binds`,
+    /// and assert the shaped result. Uses in-memory SQLite to remain hermetic.
+    #[tokio::test]
+    async fn select_via_builder_and_binds_sqlite() -> anyhow::Result<()> {
+        // Prepare an in-memory database with a small fixture
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await?;
+
+        sqlx::query(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, active INTEGER);",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "INSERT INTO users (name, active) VALUES ('alice', 1), ('bob', 0), ('adam', 1);",
+        )
+        .execute(&pool)
+        .await?;
+
+        let dyn_pool = DynPool::Sqlite(pool.clone());
+
+        // Build a SELECT spec: only active users whose name starts with 'a', ordered by id
+        let spec = SelectSpec {
+            table: "users".into(),
+            columns: vec!["id".into(), "name".into()],
+            filters: vec![
+                FilterCond { column: "active".into(), op: "=".into(), value: serde_json::json!(1) },
+                FilterCond { column: "name".into(), op: "like".into(), value: serde_json::json!("a%") },
+            ],
+            sort: Some(("id".into(), true)),
+            limit: Some(100),
+            offset: Some(0),
+        };
+
+        let (sql, values) = build_select(&spec, Dialect::Sqlite);
+        let result = execute_sql_with_binds(&dyn_pool, &sql, values, 1000).await?;
+
+        // Expect two rows: alice(id=1) and adam(id=3), in ascending id order
+        assert_eq!(result.columns, vec!["id".to_string(), "name".to_string()]);
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows[0][0], serde_json::json!(1));
+        assert_eq!(result.rows[0][1], serde_json::json!("alice"));
+        assert_eq!(result.rows[1][0], serde_json::json!(3));
+        assert_eq!(result.rows[1][1], serde_json::json!("adam"));
+        assert!(!result.truncated);
+        Ok(())
+    }
+}
