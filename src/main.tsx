@@ -2,12 +2,12 @@ import './index.css';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
-import { DbProvider } from '@/lib/db/context';
+import { ConnectionProvider } from '@/store/connection';
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
-    <DbProvider>
+    <ConnectionProvider>
       <App />
-    </DbProvider>
+    </ConnectionProvider>
   </React.StrictMode>
 );
