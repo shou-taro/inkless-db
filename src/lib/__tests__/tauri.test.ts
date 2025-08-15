@@ -16,13 +16,13 @@ import {
   fileSize,
   type QueryResult,
   type SelectSpec,
-} from '@/lib/db/tauri';
+} from '@/lib/tauri';
 
 afterEach(() => {
   vi.clearAllMocks();
 });
 
-const resolved = <T,>(v: T) => (invoke as any).mockResolvedValueOnce(v);
+const resolved = <T>(v: T) => (invoke as any).mockResolvedValueOnce(v);
 const rejected = (e: unknown) => (invoke as any).mockRejectedValueOnce(e);
 
 describe('tauri thin client wrappers', () => {
@@ -30,21 +30,31 @@ describe('tauri thin client wrappers', () => {
     resolved('conn-1');
     const id = await openConnection('Sqlite', 'sqlite::memory:');
     expect(id).toBe('conn-1');
-    expect(invoke).toHaveBeenCalledWith('open_connection', { args: { driver: 'Sqlite', url: 'sqlite::memory:' } });
+    expect(invoke).toHaveBeenCalledWith('open_connection', {
+      args: { driver: 'Sqlite', url: 'sqlite::memory:' },
+    });
   });
 
   it('closeConnection delegates to backend command', async () => {
     resolved(undefined);
     await closeConnection('conn-1');
-    expect(invoke).toHaveBeenCalledWith('close_connection', { args: { connId: 'conn-1' } });
+    expect(invoke).toHaveBeenCalledWith('close_connection', {
+      args: { connId: 'conn-1' },
+    });
   });
 
   it('executeSql returns QueryResult', async () => {
-    const qr: QueryResult = { columns: ['id', 'name'], rows: [[1, 'alice']], truncated: false };
+    const qr: QueryResult = {
+      columns: ['id', 'name'],
+      rows: [[1, 'alice']],
+      truncated: false,
+    };
     resolved(qr);
     const res = await executeSql('conn-1', 'select 1', 100);
     expect(res).toEqual(qr);
-    expect(invoke).toHaveBeenCalledWith('execute_sql', { args: { connId: 'conn-1', sql: 'select 1', limit: 100 } });
+    expect(invoke).toHaveBeenCalledWith('execute_sql', {
+      args: { connId: 'conn-1', sql: 'select 1', limit: 100 },
+    });
   });
 
   it('executeSelectSpec passes spec and returns QueryResult', async () => {
@@ -60,7 +70,9 @@ describe('tauri thin client wrappers', () => {
     };
     const res = await executeSelectSpec('conn-1', spec);
     expect(res).toEqual(qr);
-    expect(invoke).toHaveBeenCalledWith('execute_select_spec', { args: { connId: 'conn-1', spec } });
+    expect(invoke).toHaveBeenCalledWith('execute_select_spec', {
+      args: { connId: 'conn-1', spec },
+    });
   });
 
   it('getSchema returns a schema object', async () => {
@@ -68,7 +80,9 @@ describe('tauri thin client wrappers', () => {
     resolved(schema);
     const res = await getSchema('conn-1');
     expect(res).toEqual(schema);
-    expect(invoke).toHaveBeenCalledWith('get_schema', { args: { connId: 'conn-1' } });
+    expect(invoke).toHaveBeenCalledWith('get_schema', {
+      args: { connId: 'conn-1' },
+    });
   });
 
   it('openSqliteDialog normalises null', async () => {
@@ -82,12 +96,16 @@ describe('tauri thin client wrappers', () => {
     resolved(123);
     const size = await fileSize('/tmp/foo');
     expect(size).toBe(123);
-    expect(invoke).toHaveBeenCalledWith('inkless_fs_size', { path: '/tmp/foo' });
+    expect(invoke).toHaveBeenCalledWith('inkless_fs_size', {
+      path: '/tmp/foo',
+    });
   });
 
   it('wraps backend errors into Error instances', async () => {
     rejected('boom');
-    await expect(openConnection('Sqlite', 'sqlite::memory:')).rejects.toBeInstanceOf(Error);
+    await expect(
+      openConnection('Sqlite', 'sqlite::memory:')
+    ).rejects.toBeInstanceOf(Error);
 
     rejected({ message: 'bad' });
     await expect(executeSql('c', 'select 1')).rejects.toBeInstanceOf(Error);

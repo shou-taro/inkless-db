@@ -5,7 +5,7 @@
 import { invoke } from '@tauri-apps/api/core';
 
 // --- Shared types between frontend and backend ---
-export type Driver = 'Sqlite' | 'Postgres' | 'MySql';
+export type Driver = 'sqlite' | 'postgres' | 'MySql';
 
 export interface QueryResult {
   columns: string[];
@@ -36,8 +36,19 @@ export interface DatabaseSchema {
     schema: string;
     name: string;
     type_: string; // 'BASE TABLE' | 'VIEW' | etc.
-    columns: Array<{ name: string; data_type: string; not_null: boolean; default?: string | null; is_pk: boolean }>;
-    foreign_keys: Array<{ from: string; ref_schema?: string | null; to_table: string; to: string }>;
+    columns: Array<{
+      name: string;
+      data_type: string;
+      not_null: boolean;
+      default?: string | null;
+      is_pk: boolean;
+    }>;
+    foreign_keys: Array<{
+      from: string;
+      ref_schema?: string | null;
+      to_table: string;
+      to: string;
+    }>;
   }>;
 }
 
@@ -52,7 +63,10 @@ function toError(err: unknown): Error {
 }
 
 // --- Tauri command wrappers ---
-export async function openConnection(driver: Driver, url: string): Promise<string> {
+export async function openConnection(
+  driver: Driver,
+  url: string
+): Promise<string> {
   try {
     return await invoke<string>('open_connection', { args: { driver, url } });
   } catch (e) {
@@ -62,23 +76,34 @@ export async function openConnection(driver: Driver, url: string): Promise<strin
 
 export async function closeConnection(connId: string): Promise<void> {
   try {
-    await invoke('close_connection', { args: { connId } });
+    await invoke('close_connection', { args: { conn_id: connId } });
   } catch (e) {
     throw toError(e);
   }
 }
 
-export async function executeSql(connId: string, sql: string, limit = 1000): Promise<QueryResult> {
+export async function executeSql(
+  connId: string,
+  sql: string,
+  limit = 1000
+): Promise<QueryResult> {
   try {
-    return await invoke<QueryResult>('execute_sql', { args: { connId, sql, limit } });
+    return await invoke<QueryResult>('execute_sql', {
+      args: { conn_id: connId, sql, limit },
+    });
   } catch (e) {
     throw toError(e);
   }
 }
 
-export async function executeSelectSpec(connId: string, spec: SelectSpec): Promise<QueryResult> {
+export async function executeSelectSpec(
+  connId: string,
+  spec: SelectSpec
+): Promise<QueryResult> {
   try {
-    return await invoke<QueryResult>('execute_select_spec', { args: { connId, spec } });
+    return await invoke<QueryResult>('execute_select_spec', {
+      args: { conn_id: connId, spec },
+    });
   } catch (e) {
     throw toError(e);
   }
@@ -86,13 +111,17 @@ export async function executeSelectSpec(connId: string, spec: SelectSpec): Promi
 
 export async function getSchema(connId: string): Promise<DatabaseSchema> {
   try {
-    return await invoke<DatabaseSchema>('get_schema', { args: { connId } });
+    return await invoke<DatabaseSchema>('get_schema', {
+      args: { conn_id: connId },
+    });
   } catch (e) {
     throw toError(e);
   }
 }
 
 // --- Optional convenience wrappers used by the UI ---
+// NOTE: On macOS, the backend should open the dialog with security-scoped access enabled
+// (e.g. NSOpenPanel with security-scoped bookmarks) so the selected path can be accessed.
 export async function openSqliteDialog(): Promise<string | null> {
   try {
     // Backend signature takes Window internally; JS side requires no arguments
@@ -109,4 +138,32 @@ export async function fileSize(path: string): Promise<number> {
   } catch (e) {
     throw toError(e);
   }
+}
+
+// --- macOS security-scoped resource helpers ---
+// Begin a security-scoped access session for the given file path and return a session id (token).
+// The backend must implement a Tauri command named `begin_security_scoped_access` that accepts `{ path: string }`
+// and returns a string token/id. On non-macOS platforms it can be a no-op that returns an empty string.
+export async function beginSecurityScopedAccess(path: string): Promise<string> {
+  try {
+    return await invoke<string>('begin_security_scoped_access', {
+      args: { path },
+    });
+  } catch (e) {
+    throw toError(e);
+  }
+}
+
+// End a previously begun security-scoped session.
+// The backend must implement a Tauri command named `end_security_scoped_access` that accepts `{ id: string }`.
+export async function endSecurityScopedAccess(id: string): Promise<void> {
+  try {
+    await invoke('end_security_scoped_access', { args: { id } });
+  } catch (e) {
+    throw toError(e);
+  }
+}
+
+export async function copyToTemp(path: string): Promise<string> {
+  return await invoke<string>('copy_to_temp', { path });
 }
