@@ -24,9 +24,14 @@
  */
 export function getBaseName(p: string): string {
   if (!p) return '';
-  // Remove a single trailing separator to handle "/dir/" and "C:\dir\"
+  // Treat whitespace-only strings as empty for caller convenience
+  if (typeof p === 'string' && p.trim().length === 0) return '';
+
+  // Remove trailing separators to handle "/dir/" and "C:\\dir\\"
   const trimmed = p.replace(/[\\/]+$/, '');
-  // Split on both Windows and POSIX separators
+  if (trimmed.length === 0) return '';
+
+  // Split on both Windows and POSIX separators and return the last segment
   const parts = trimmed.split(/[\\/]/);
   return parts.length ? parts[parts.length - 1] : trimmed;
 }

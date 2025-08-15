@@ -92,13 +92,15 @@ export const formatBytes = (
     idx++;
   }
 
-  // Determine decimal places.
-  const dp =
-    typeof decimals === 'number'
-      ? Math.max(0, decimals)
-      : value < 10 && idx > 0
-        ? 1
-        : 0;
+  // Smart decimals: for non-byte units and values below 10, show 1 dp **only** if the value
+  // is not an integer (avoid rendering "1.0 MB"). Use an epsilon to offset FP rounding quirks.
+  const dp = (() => {
+    if (typeof decimals === 'number') return Math.max(0, decimals);
+    const EPS = 1e-12;
+    const isInt = Math.abs(value - Math.round(value)) < EPS;
+    if (idx > 0 && value < 10 && !isInt) return 1;
+    return 0;
+  })();
 
   const sep = space ? ' ' : '';
   return `${sign}${value.toFixed(dp)}${sep}${U[idx]}`;
