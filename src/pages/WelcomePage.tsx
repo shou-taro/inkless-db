@@ -248,8 +248,6 @@ export default function WelcomePage({
                   <div className="grid gap-4">
                     <Dropzone
                       sqlitePath={sqlitePath}
-                      // selectedFile={selectedFile}
-                      // selectedPath={selectedPath}
                       isDragging={drag.dragging}
                       onDragEnter={onDragEnter}
                       onDragOver={onDragOver}
@@ -258,8 +256,6 @@ export default function WelcomePage({
                       onBrowseClick={onBrowseClick}
                       resetSelection={resetSelection}
                       formatBytes={formatBytes}
-                      // onFileChange={noopOnFileChange}
-                      // fileInputRef={fileInputRef}
                     />
                   </div>
                 </CardContent>

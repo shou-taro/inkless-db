@@ -21,6 +21,7 @@ export function createSQLiteClient(conn: SQLiteConn): DbClient {
 
     async getRows(table: string, limit = 10) {
       const path = ensurePath();
+      if (!table.trim()) throw new Error('Table name is required');
       const result = await invoke<{
         columns: string[];
         rows: Array<(string | number | null)[]>;

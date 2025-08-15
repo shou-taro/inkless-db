@@ -350,108 +350,19 @@ export default function GraphPage() {
     setPreview(null);
     try {
       const client: any = dbCtx?.client;
-      if (client && typeof client.getRows === 'function') {
-        const res = await client.getRows({ table: tableName, limit: 5 });
-        if (res && Array.isArray(res.rows)) {
-          const cols = Array.isArray(res.columns)
-            ? res.columns
-            : res.rows[0]
-              ? Object.keys(res.rows[0])
-              : [];
-          setPreview({ columns: cols, rows: res.rows });
-          return;
-        }
+      if (!client || typeof client.getRows !== 'function') {
+        throw new Error('Row preview is not available for this connection.');
       }
-
-      // Fallback: call into Tauri using a single canonical command.
-      // Fallback: call into Tauri using a single canonical command.
-      // We standardise on `db_get_rows` with a positional string only.
-      if (tauriInvoke) {
-        // Normalise backend replies into { columns, rows }
-        const asPreview = (res: any): PreviewResult | null => {
-          if (!res) return null;
-          if (Array.isArray(res.rows)) {
-            const cols = Array.isArray(res.columns)
-              ? res.columns
-              : res.rows[0]
-                ? Object.keys(res.rows[0])
-                : [];
-            return { columns: cols, rows: res.rows };
-          }
-          if (Array.isArray(res)) {
-            const cols = res[0] ? Object.keys(res[0]) : [];
-            return { columns: cols, rows: res };
-          }
-          return null;
-        };
-
-        try {
-          // Debug log the type and value of tableName before invoking db_get_rows.
-          console.log(
-            '[DBG] preview: db_get_rows arg typeof/value =',
-            typeof tableName,
-            tableName
-          );
-          console.log(
-            '[DBG] preview: invoking db_get_rows (positional string) for table',
-            tableName
-          );
-          const res = await tauriInvoke('db_get_rows', tableName as any);
-          const preview = asPreview(res);
-          if (preview) {
-            setPreview(preview);
-            return;
-          }
-          // If we reached here, the response shape was unexpected or empty.
-          setPreviewError('Unexpected response from db_get_rows.');
-          return;
-        } catch (e: any) {
-          const msg = String(e?.message || e);
-
-          // If backend complains about type, attempt a robust raw-SQL fallback.
-          if (/expected a string/i.test(msg) || /invalid args/i.test(msg)) {
-            try {
-              const sql = `SELECT * FROM "${String(tableName).split('"').join('""')}" LIMIT 5`;
-              console.log(
-                '[DBG] preview: falling back to inkless_exec_sql with',
-                sql
-              );
-              const res2 = await tauriInvoke('inkless_exec_sql', {
-                sql,
-              } as any);
-              const asPreview = (res: any): PreviewResult | null => {
-                if (!res) return null;
-                if (Array.isArray(res.rows)) {
-                  const cols = Array.isArray(res.columns)
-                    ? res.columns
-                    : res.rows[0]
-                      ? Object.keys(res.rows[0])
-                      : [];
-                  return { columns: cols, rows: res.rows };
-                }
-                if (Array.isArray(res)) {
-                  const cols = res[0] ? Object.keys(res[0]) : [];
-                  return { columns: cols, rows: res };
-                }
-                return null;
-              };
-              const preview2 = asPreview(res2);
-              if (preview2) {
-                setPreview(preview2);
-                return;
-              }
-            } catch (e2) {
-              // ignore and fall through to error surface
-            }
-          }
-
-          // Surface a concise message and stop.
-          setPreviewError(msg);
-          return;
-        }
+      const res = await client.getRows(tableName, 5);
+      if (!res || !Array.isArray(res.rows)) {
+        throw new Error('Unexpected response from db_get_rows.');
       }
-
-      setPreviewError('Row preview is not available for this connection.');
+      const cols = Array.isArray(res.columns)
+        ? res.columns
+        : res.rows[0]
+          ? Object.keys(res.rows[0])
+          : [];
+      setPreview({ columns: cols, rows: res.rows });
     } catch (e: any) {
       setPreviewError(String(e?.message || e));
     } finally {
@@ -584,7 +495,13 @@ export default function GraphPage() {
                                         className="whitespace-nowrap px-3 py-2 align-top text-slate-700"
                                       >
                                         {(() => {
-                                          const v = r?.[c];
+                                          const idx =
+                                            preview.columns.indexOf(c);
+                                          const v = Array.isArray(r)
+                                            ? idx >= 0
+                                              ? r[idx]
+                                              : undefined
+                                            : r?.[c];
                                           if (v === null || v === undefined)
                                             return (
                                               <span className="text-slate-400">
