@@ -5,14 +5,39 @@ use sqlx::{Pool, Row};
 
 use super::{Dialect, DynPool};
 
+fn parse_len_prec_scale(ty: &str) -> (Option<u32>, Option<u32>, Option<u32>) {
+    // Handles e.g. VARCHAR(255), CHAR(32), NUMERIC(10,2), DECIMAL(12, 4)
+    if let Some(start) = ty.find('(') {
+        if let Some(end_rel) = ty[start + 1..].find(')') {
+            let inside = &ty[start + 1..start + 1 + end_rel];
+            let mut parts = inside.split(',').map(|s| s.trim());
+            let a = parts.next().and_then(|s| s.parse::<u32>().ok());
+            let b = parts.next().and_then(|s| s.parse::<u32>().ok());
+            return (a, a, b);
+        }
+    }
+    (None, None, None)
+}
+
 /// A column definition in a table or view.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColumnDef {
     pub name: String,
+    #[serde(rename = "type")]
     pub data_type: String,
-    pub not_null: bool,
+    /// Frontend expects `nullable: boolean`
+    #[serde(rename = "nullable")]
+    pub nullable: bool,
+    /// Frontend expects `defaultValue`
+    #[serde(rename = "defaultValue")]
     pub default: Option<String>,
+    /// Frontend expects `primaryKey`
+    #[serde(rename = "primaryKey")]
     pub is_pk: bool,
+    /// Optional size/precision info for display
+    pub length: Option<u32>,
+    pub precision: Option<u32>,
+    pub scale: Option<u32>,
 }
 
 /// A foreign key constraint between tables.
@@ -68,12 +93,19 @@ async fn inspect_sqlite(pool: &Pool<sqlx::Sqlite>) -> Result<DatabaseSchema> {
             .await?;
         let columns = cols_rows
             .into_iter()
-            .map(|r| ColumnDef {
-                name: r.try_get::<String, _>("name").unwrap_or_default(),
-                data_type: r.try_get::<String, _>("type").unwrap_or_default(),
-                not_null: r.try_get::<i64, _>("notnull").unwrap_or(0) == 1,
-                default: r.try_get::<Option<String>, _>("dflt_value").unwrap_or(None),
-                is_pk: r.try_get::<i64, _>("pk").unwrap_or(0) == 1,
+            .map(|r| {
+                let dt: String = r.try_get::<String, _>("type").unwrap_or_default();
+                let (len_opt, prec_opt, scale_opt) = parse_len_prec_scale(&dt);
+                ColumnDef {
+                    name: r.try_get::<String, _>("name").unwrap_or_default(),
+                    data_type: dt,
+                    nullable: !(r.try_get::<i64, _>("notnull").unwrap_or(0) == 1),
+                    default: r.try_get::<Option<String>, _>("dflt_value").unwrap_or(None),
+                    is_pk: r.try_get::<i64, _>("pk").unwrap_or(0) == 1,
+                    length: len_opt,
+                    precision: prec_opt,
+                    scale: scale_opt,
+                }
             })
             .collect();
 
@@ -128,14 +160,17 @@ async fn inspect_postgres(pool: &Pool<sqlx::Postgres>) -> Result<DatabaseSchema>
             r#"
             SELECT a.attname AS column_name,
                    t.typname AS data_type,
-                   a.attnotnull AS not_null,
-                   pg_get_expr(ad.adbin, ad.adrelid) AS default,
+                   NOT a.attnotnull AS nullable,
+                   pg_get_expr(ad.adbin, ad.adrelid) AS default_value,
                    EXISTS (
                        SELECT 1 FROM pg_index i
                        WHERE i.indrelid = a.attrelid
                          AND a.attnum = ANY(i.indkey)
                          AND i.indisprimary
-                   ) AS is_pk
+                   ) AS is_pk,
+                   information_schema.character_maximum_length(a.attrelid::regclass::text, a.attnum) AS char_len,
+                   information_schema.numeric_precision(a.attrelid::regclass::text, a.attnum) AS num_precision,
+                   information_schema.numeric_scale(a.attrelid::regclass::text, a.attnum) AS num_scale
             FROM pg_attribute a
             JOIN pg_class c ON c.oid = a.attrelid
             JOIN pg_type t ON t.oid = a.atttypid
@@ -154,9 +189,24 @@ async fn inspect_postgres(pool: &Pool<sqlx::Postgres>) -> Result<DatabaseSchema>
             .map(|r| ColumnDef {
                 name: r.try_get::<String, _>("column_name").unwrap_or_default(),
                 data_type: r.try_get::<String, _>("data_type").unwrap_or_default(),
-                not_null: r.try_get::<bool, _>("not_null").unwrap_or(false),
-                default: r.try_get::<Option<String>, _>("default").unwrap_or(None),
+                nullable: r.try_get::<bool, _>("nullable").unwrap_or(true),
+                default: r.try_get::<Option<String>, _>("default_value").unwrap_or(None),
                 is_pk: r.try_get::<bool, _>("is_pk").unwrap_or(false),
+                length: r
+                    .try_get::<Option<i32>, _>("char_len")
+                    .ok()
+                    .flatten()
+                    .map(|v| v as u32),
+                precision: r
+                    .try_get::<Option<i32>, _>("num_precision")
+                    .ok()
+                    .flatten()
+                    .map(|v| v as u32),
+                scale: r
+                    .try_get::<Option<i32>, _>("num_scale")
+                    .ok()
+                    .flatten()
+                    .map(|v| v as u32),
             })
             .collect();
 
@@ -226,7 +276,10 @@ async fn inspect_mysql(pool: &Pool<sqlx::MySql>) -> Result<DatabaseSchema> {
 
         let cols_rows = sqlx::query(
             r#"
-            SELECT column_name, data_type, is_nullable, column_default, column_key
+            SELECT column_name, data_type, is_nullable, column_default, column_key,
+                   character_maximum_length AS char_len,
+                   numeric_precision AS num_precision,
+                   numeric_scale AS num_scale
             FROM information_schema.columns
             WHERE table_schema = ? AND table_name = ?
             ORDER BY ordinal_position
@@ -243,9 +296,24 @@ async fn inspect_mysql(pool: &Pool<sqlx::MySql>) -> Result<DatabaseSchema> {
                 ColumnDef {
                     name: r.try_get::<String, _>("column_name").unwrap_or_default(),
                     data_type: r.try_get::<String, _>("data_type").unwrap_or_default(),
-                    not_null: r.try_get::<String, _>("is_nullable").unwrap_or("YES".into()) == "NO",
+                    nullable: r.try_get::<String, _>("is_nullable").unwrap_or_else(|_| "YES".into()) == "YES",
                     default: r.try_get::<Option<String>, _>("column_default").unwrap_or(None),
                     is_pk: key == "PRI",
+                    length: r
+                        .try_get::<Option<i64>, _>("char_len")
+                        .ok()
+                        .flatten()
+                        .map(|v| v as u32),
+                    precision: r
+                        .try_get::<Option<i64>, _>("num_precision")
+                        .ok()
+                        .flatten()
+                        .map(|v| v as u32),
+                    scale: r
+                        .try_get::<Option<i64>, _>("num_scale")
+                        .ok()
+                        .flatten()
+                        .map(|v| v as u32),
                 }
             })
             .collect();

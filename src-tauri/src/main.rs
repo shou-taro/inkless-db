@@ -4,32 +4,7 @@
 mod api;  // Tauri command handlers for DB operations
 mod db;   // DB layer: pools, schema, builders, etc.
 
-use futures::channel::oneshot;
 use tauri_plugin_dialog::{DialogExt, FileDialogBuilder};
-
-#[tauri::command]
-async fn open_sqlite_dialog(window: tauri::Window) -> Option<String> {
-    // Bridge the callback-style API to async via a oneshot channel (non-blocking).
-    let (tx, rx) = oneshot::channel::<Option<String>>();
-
-    FileDialogBuilder::new(window.dialog().clone())
-        .add_filter("SQLite DB", &["sqlite", "db", "sqlite3", "db3"])
-        .pick_file(move |picked| {
-            let path = picked.map(|p| p.to_string());
-            let _ = tx.send(path);
-        });
-
-    rx.await.ok().flatten()
-}
-
-#[tauri::command]
-async fn inkless_fs_size(path: String) -> Result<u64, String> {
-    // Returns the file size (in bytes) for the given absolute path.
-    use std::fs;
-    fs::metadata(&path)
-        .map(|m| m.len())
-        .map_err(|e| e.to_string())
-}
 
 fn main() {
     tauri::Builder::default()
@@ -44,10 +19,14 @@ fn main() {
             api::get_schema,
             api::execute_select_spec,
             // Utils
-            open_sqlite_dialog,
-            inkless_fs_size
+            api::open_sqlite_dialog,
+            api::begin_security_scoped_access,
+            api::end_security_scoped_access,
+            api::inkless_fs_size,
+            api::copy_to_temp,
         ])
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
