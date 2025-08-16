@@ -13,6 +13,7 @@ import {
   useNodesState,
   NodeMouseHandler,
   ReactFlowInstance,
+  MarkerType,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { Button } from '@/components/ui/button';
@@ -46,8 +47,8 @@ import TableNode from '@/components/TableNode';
  * Extracted to avoid magic numbers and scattered hex values.
  * These align with Tailwind tokens configured in tailwind.config.js where possible.
  */
-const SPACING_X = 280; // horizontal gap between table nodes (narrower to avoid overly wide diagrams)
-const SPACING_Y = 220; // vertical gap between table nodes (slightly tighter but still readable)
+const SPACING_X = 360; // horizontal gap between table nodes to reduce edge label collisions
+const SPACING_Y = 260; // vertical gap between table nodes for better readability
 const FOCUS_OFFSET_X = 120; // centre offset when focusing a node (x)
 const FOCUS_OFFSET_Y = 60; // centre offset when focusing a node (y)
 const FOCUS_ZOOM = 1.1; // zoom level used when focusing a node
@@ -88,24 +89,103 @@ type PreviewResult = { columns: string[]; rows: any[] };
 const nodeTypes = { table: TableNode };
 
 function schemaToFlow(schema: Schema) {
-  // Choose a near-square grid based on table count to prevent excessively wide rows.
-  const count = schema.tables.length || 1;
-  const cols = Math.max(1, Math.ceil(Math.sqrt(count)));
-  const nodes: Node[] = schema.tables.map((t, idx) => ({
-    id: t.name,
-    type: 'table',
-    position: {
-      x: 80 + (idx % cols) * SPACING_X,
-      y: 60 + Math.floor(idx / cols) * SPACING_Y,
-    },
-    data: { table: t },
-  }));
+  // Build child -> parents adjacency for layout; our edges are child → parent.
+  const names = schema.tables.map((t) => t.name);
+  const adj = new Map<string, Set<string>>(); // child -> parents
+  const indeg = new Map<string, number>(); // indegree in child→parent graph (incoming to a node as parent)
+  const level = new Map<string, number>(); // horizontal rank (x direction)
 
+  for (const n of names) {
+    adj.set(n, new Set());
+    indeg.set(n, 0);
+  }
+
+  for (const fk of schema.fks) {
+    // child -> parent
+    if (!adj.has(fk.from.table)) adj.set(fk.from.table, new Set());
+    adj.get(fk.from.table)!.add(fk.to.table);
+    indeg.set(fk.to.table, (indeg.get(fk.to.table) ?? 0) + 1);
+  }
+
+  // Kahn's algorithm to derive levels ensuring child (source) is left of parent (target).
+  const q: string[] = [];
+  for (const n of names) if ((indeg.get(n) ?? 0) === 0) q.push(n);
+
+  // Stable ordering within the queue
+  q.sort();
+  for (const n of names) if (!level.has(n)) level.set(n, 0);
+
+  const order: string[] = [];
+  while (q.length) {
+    const u = q.shift()!;
+    order.push(u);
+    const lu = level.get(u) ?? 0;
+    for (const v of adj.get(u) ?? []) {
+      // place parent to the right of child
+      level.set(v, Math.max(level.get(v) ?? 0, lu + 1));
+      const nd = (indeg.get(v) ?? 0) - 1;
+      indeg.set(v, nd);
+      if (nd === 0) {
+        // Keep deterministic by binary insert; simpler: push then sort
+        q.push(v);
+        q.sort();
+      }
+    }
+  }
+
+  // If there are cycles, some nodes may still have indegree > 0. Place them after their max neighbour level.
+  for (const n of names) {
+    if (!order.includes(n)) {
+      const parents = Array.from(adj.get(n) ?? []);
+      const maxLv = parents.reduce(
+        (acc, p) => Math.max(acc, level.get(p) ?? 0),
+        0
+      );
+      level.set(n, Math.max(level.get(n) ?? 0, maxLv + 1));
+      order.push(n);
+    }
+  }
+
+  // Group by level to compute vertical placement; keep names stable alphabetically per level.
+  const byLevel = new Map<number, string[]>();
+  for (const n of names) {
+    const lv = level.get(n) ?? 0;
+    const arr = byLevel.get(lv) ?? [];
+    arr.push(n);
+    byLevel.set(lv, arr);
+  }
+  for (const arr of byLevel.values()) arr.sort();
+
+  const nodes: Node[] = [];
+  const maxCols = Math.max(...Array.from(byLevel.keys()), 0);
+  for (let lv = 0; lv <= maxCols; lv++) {
+    const col = byLevel.get(lv) ?? [];
+    col.forEach((name, idx) => {
+      nodes.push({
+        id: name,
+        type: 'table',
+        position: { x: 80 + lv * SPACING_X, y: 60 + idx * SPACING_Y },
+        data: { table: schema.tables.find((t) => t.name === name)! },
+      });
+    });
+  }
+
+  // Keep existing edge direction (child → parent). With the above layout, arrows tend to go left→right.
   const edges: Edge[] = schema.fks.map((fk, i) => ({
     id: `fk-${i}-${fk.from.table}.${fk.from.column}->${fk.to.table}.${fk.to.column}`,
     source: fk.from.table,
     target: fk.to.table,
+    type: 'smoothstep',
+    markerEnd: { type: MarkerType.ArrowClosed },
     label: `${fk.from.column} → ${fk.to.column}`,
+    labelStyle: { fontSize: 10, fill: '#475569' },
+    labelBgStyle: {
+      fill: 'rgba(255,255,255,0.9)',
+      stroke: '#E9D5FF',
+      strokeWidth: 1,
+    },
+    labelBgPadding: [4, 2],
+    labelBgBorderRadius: 6,
   }));
 
   return { nodes, edges };
