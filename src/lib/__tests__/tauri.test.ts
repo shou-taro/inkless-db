@@ -28,10 +28,10 @@ const rejected = (e: unknown) => (invoke as any).mockRejectedValueOnce(e);
 describe('tauri thin client wrappers', () => {
   it('openConnection returns a connection id', async () => {
     resolved('conn-1');
-    const id = await openConnection('Sqlite', 'sqlite::memory:');
+    const id = await openConnection('sqlite', 'sqlite::memory:');
     expect(id).toBe('conn-1');
     expect(invoke).toHaveBeenCalledWith('open_connection', {
-      args: { driver: 'Sqlite', url: 'sqlite::memory:' },
+      args: { driver: 'sqlite', url: 'sqlite::memory:' },
     });
   });
 
@@ -39,7 +39,7 @@ describe('tauri thin client wrappers', () => {
     resolved(undefined);
     await closeConnection('conn-1');
     expect(invoke).toHaveBeenCalledWith('close_connection', {
-      args: { connId: 'conn-1' },
+      args: { conn_id: 'conn-1' },
     });
   });
 
@@ -53,7 +53,7 @@ describe('tauri thin client wrappers', () => {
     const res = await executeSql('conn-1', 'select 1', 100);
     expect(res).toEqual(qr);
     expect(invoke).toHaveBeenCalledWith('execute_sql', {
-      args: { connId: 'conn-1', sql: 'select 1', limit: 100 },
+      args: { conn_id: 'conn-1', sql: 'select 1', limit: 100 },
     });
   });
 
@@ -71,7 +71,7 @@ describe('tauri thin client wrappers', () => {
     const res = await executeSelectSpec('conn-1', spec);
     expect(res).toEqual(qr);
     expect(invoke).toHaveBeenCalledWith('execute_select_spec', {
-      args: { connId: 'conn-1', spec },
+      args: { conn_id: 'conn-1', spec },
     });
   });
 
@@ -81,7 +81,7 @@ describe('tauri thin client wrappers', () => {
     const res = await getSchema('conn-1');
     expect(res).toEqual(schema);
     expect(invoke).toHaveBeenCalledWith('get_schema', {
-      args: { connId: 'conn-1' },
+      args: { conn_id: 'conn-1' },
     });
   });
 
@@ -104,7 +104,7 @@ describe('tauri thin client wrappers', () => {
   it('wraps backend errors into Error instances', async () => {
     rejected('boom');
     await expect(
-      openConnection('Sqlite', 'sqlite::memory:')
+      openConnection('sqlite', 'sqlite::memory:')
     ).rejects.toBeInstanceOf(Error);
 
     rejected({ message: 'bad' });

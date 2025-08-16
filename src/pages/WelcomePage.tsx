@@ -26,39 +26,7 @@
  *   prevent the browser from navigating away when a file is dropped outside
  *   the intended target.
  */
-// --- Drag state utilities (kept outside the component to avoid re-creation) ---
-type DragState = { depth: number; dragging: boolean };
-type DragAction =
-  | { type: 'enter' }
-  | { type: 'leave' }
-  | { type: 'drop' }
-  | { type: 'reset' };
-
-function dragReducer(state: DragState, action: DragAction): DragState {
-  switch (action.type) {
-    case 'enter': {
-      const depth = state.depth + 1;
-      return { depth, dragging: true };
-    }
-    case 'leave': {
-      const depth = Math.max(0, state.depth - 1);
-      return { depth, dragging: depth > 0 };
-    }
-    case 'drop':
-    case 'reset':
-      return { depth: 0, dragging: false };
-    default:
-      return state;
-  }
-}
-
-// Normalises DOM drag events
-const stopEvent = (e: Event | React.DragEvent) => {
-  e.preventDefault();
-  // Do NOT stopPropagation so OS-level file-drop can still bubble to Tauri
-};
-
-import { useEffect, useState, useCallback, useReducer, useRef } from 'react';
+import { useState, useCallback, useReducer, useRef } from 'react';
 import {
   Card,
   CardContent,
@@ -83,9 +51,14 @@ import {
   endSecurityScopedAccess,
   copyToTemp,
 } from '@/lib/tauri';
-import type { Event as TauriEvent } from '@tauri-apps/api/event';
-import { getCurrentWindow, type DragDropEvent } from '@tauri-apps/api/window';
-const appWindow = getCurrentWindow();
+import { dragReducer } from '@/hooks/useDragState';
+import { useNativeFileDrop } from '@/hooks/useNativeFileDrop';
+
+// Normalises DOM drag events
+const stopEvent = (e: Event | React.DragEvent) => {
+  e.preventDefault();
+  // Do NOT stopPropagation so OS-level file-drop can still bubble to Tauri
+};
 
 export default function WelcomePage({
   onOpenGraph,
@@ -101,6 +74,7 @@ export default function WelcomePage({
   const openingRef = useRef(false);
   const scopeOpeningRef = useRef(false);
   const { setConnection } = useConnection();
+  const canOpen = Boolean(sqlitePath);
 
   const resetSelection = useCallback(() => {
     setSqlitePath('');
@@ -133,41 +107,7 @@ export default function WelcomePage({
   );
 
   // Prefer Tauri's OS-level drag & drop API in Tauri v2
-  useEffect(() => {
-    // Prevent browser navigation on file drops but do not stop propagation.
-    const preventNav = (e: Event) => {
-      e.preventDefault();
-    };
-    window.addEventListener('dragover', preventNav);
-    window.addEventListener('drop', preventNav);
-
-    let unlisten: (() => void) | undefined;
-
-    appWindow
-      .onDragDropEvent((event: TauriEvent<DragDropEvent>) => {
-        const e = event.payload;
-        if (e.type === 'enter') {
-          dispatchDrag({ type: 'enter' });
-        } else if (e.type === 'over') {
-          dispatchDrag({ type: 'enter' });
-        } else if (e.type === 'drop') {
-          const first = Array.isArray(e.paths) ? e.paths[0] : undefined;
-          if (first) handlePath(first);
-          dispatchDrag({ type: 'drop' });
-        } else if (e.type === 'leave') {
-          dispatchDrag({ type: 'reset' });
-        }
-      })
-      .then((un) => {
-        unlisten = un;
-      });
-
-    return () => {
-      window.removeEventListener('dragover', preventNav);
-      window.removeEventListener('drop', preventNav);
-      if (unlisten) unlisten();
-    };
-  }, [handlePath]);
+  useNativeFileDrop(handlePath, dispatchDrag);
 
   const onBrowseClick = useCallback(async () => {
     if (openingRef.current) return; // prevent double-open from bubbling/labels
@@ -334,7 +274,7 @@ export default function WelcomePage({
                   <Button
                     type="button"
                     variant="brand"
-                    disabled={!sqlitePath}
+                    disabled={!canOpen}
                     onClick={openWithFallback}
                   >
                     Open
