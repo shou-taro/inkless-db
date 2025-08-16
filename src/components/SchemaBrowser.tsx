@@ -83,31 +83,6 @@ function Highlight({ text, query }: { text: string; query: string }) {
   );
 }
 
-function parseLenPrecScaleFromType(ty?: string): {
-  length?: number;
-  precision?: number;
-  scale?: number;
-} {
-  if (!ty) return {};
-  const m = ty.match(/\(([^)]+)\)/);
-  if (!m) return {};
-  const parts = m[1].split(',').map((s) => s.trim());
-  const a = parts[0] && /^\d+$/.test(parts[0]) ? Number(parts[0]) : undefined;
-  const b = parts[1] && /^\d+$/.test(parts[1]) ? Number(parts[1]) : undefined;
-  // Heuristic: CHAR/VARCHAR/TEXT-like → length, NUMERIC/DECIMAL-like → precision/scale
-  const upper = ty.toUpperCase();
-  if (/CHAR|VARCHAR|N?VAR?CHAR|STRING/.test(upper)) {
-    return { length: a };
-  }
-  if (/DECIMAL|NUMERIC/.test(upper)) {
-    return { precision: a, scale: b };
-  }
-  // Fallback: if two numbers, treat as precision/scale; if one, treat as length
-  if (a !== undefined && b !== undefined) return { precision: a, scale: b };
-  if (a !== undefined) return { length: a };
-  return {};
-}
-
 export default function SchemaBrowser({
   schema,
   query,
@@ -228,33 +203,34 @@ export default function SchemaBrowser({
                 {selectedTable.columns.slice(0, 12).map((c) => (
                   <li
                     key={c.name}
-                    className="flex items-center justify-between"
+                    className="grid grid-cols-3 items-center gap-2 text-xs"
                   >
                     {/* Left: name with key emoji if primary key */}
                     <span className="truncate text-sm" title={c.name}>
                       {c.primaryKey ? '🔑 ' : ''}
                       {c.name}
                     </span>
-                    {/* Right: NOT NULL / NULL OK and type */}
-                    <div className="flex shrink-0 items-center gap-1">
-                      {c.nullable === false ? (
-                        <span className="rounded bg-rose-100 px-1.5 py-0.5 text-[10px] leading-4 text-rose-700">
-                          NOT NULL
-                        </span>
-                      ) : (
-                        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] leading-4 text-slate-600">
-                          NULL OK
-                        </span>
-                      )}
-                      {c.type ? (
-                        <span
-                          className="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] leading-4 text-purple-700"
-                          title={c.type}
-                        >
-                          {c.type}
-                        </span>
-                      ) : null}
-                    </div>
+                    {/* Middle: NOT NULL / NULL OK */}
+                    {c.nullable === false ? (
+                      <span className="rounded bg-fuchsia-100 px-1.5 py-0.5 text-[10px] leading-4 text-fuchsia-700">
+                        NOT NULL
+                      </span>
+                    ) : (
+                      <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] leading-4 text-slate-600">
+                        NULL OK
+                      </span>
+                    )}
+                    {/* Right: type */}
+                    {c.type ? (
+                      <span
+                        className="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] leading-4 text-purple-700"
+                        title={c.type}
+                      >
+                        {c.type}
+                      </span>
+                    ) : (
+                      <span />
+                    )}
                   </li>
                 ))}
                 {selectedTable.columns.length > 12 && (

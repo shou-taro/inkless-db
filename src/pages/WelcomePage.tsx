@@ -26,7 +26,7 @@
  *   prevent the browser from navigating away when a file is dropped outside
  *   the intended target.
  */
-import { useState, useCallback, useReducer, useRef } from 'react';
+import { useState, useCallback, useReducer, useRef, useEffect } from 'react';
 import {
   Card,
   CardContent,
@@ -40,7 +40,6 @@ import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Toaster, toast } from 'sonner';
-import { formatBytes } from '@/lib/format';
 import { isAcceptedFileName } from '@/lib/file-utils';
 import Dropzone from '@/components/Dropzone';
 import { useConnection } from '@/store/connection';
@@ -53,6 +52,8 @@ import {
 } from '@/lib/tauri';
 import { dragReducer } from '@/hooks/useDragState';
 import { useNativeFileDrop } from '@/hooks/useNativeFileDrop';
+// UI/event guard delays
+const OPEN_GUARD_DELAY_MS = 300;
 
 // Normalises DOM drag events
 const stopEvent = (e: Event | React.DragEvent) => {
@@ -65,7 +66,6 @@ export default function WelcomePage({
 }: {
   onOpenGraph: () => void;
 }) {
-  const [sqlitePath, setSqlitePath] = useState('');
   const [drag, dispatchDrag] = useReducer(dragReducer, {
     depth: 0,
     dragging: false,
@@ -73,11 +73,17 @@ export default function WelcomePage({
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const openingRef = useRef(false);
   const scopeOpeningRef = useRef(false);
+  const scopeTokenRef = useRef<string | null>(null);
   const { setConnection } = useConnection();
-  const canOpen = Boolean(sqlitePath);
+  const canOpen = !!selectedPath;
 
   const resetSelection = useCallback(() => {
-    setSqlitePath('');
+    // End any previous security-scoped access
+    if (scopeTokenRef.current) {
+      // fire and forget – UI is resetting selection
+      endSecurityScopedAccess(scopeTokenRef.current).catch(() => void 0);
+      scopeTokenRef.current = null;
+    }
     setSelectedPath(null);
   }, []);
 
@@ -100,7 +106,20 @@ export default function WelcomePage({
         showUnsupportedToast();
         return;
       }
-      setSqlitePath(path);
+      // Close previous scope if any
+      if (scopeTokenRef.current) {
+        try {
+          await endSecurityScopedAccess(scopeTokenRef.current);
+        } catch {}
+        scopeTokenRef.current = null;
+      }
+      // Begin security scope **before** setting path so size probing works (iCloud/Downloads, etc.)
+      try {
+        const tok = await beginSecurityScopedAccess(path);
+        scopeTokenRef.current = tok || null;
+      } catch {
+        // If scope cannot be acquired (non-macOS or permission), continue; fallback will handle open
+      }
       setSelectedPath(path);
     },
     [resetSelection, showUnsupportedToast]
@@ -125,7 +144,7 @@ export default function WelcomePage({
       // small delay to ignore duplicate events from the same user action
       setTimeout(() => {
         openingRef.current = false;
-      }, 300);
+      }, OPEN_GUARD_DELAY_MS);
     }
   }, [handlePath]);
 
@@ -142,11 +161,6 @@ export default function WelcomePage({
   const onDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     stopEvent(e);
     dispatchDrag({ type: 'leave' });
-  }, []);
-
-  const onDrop = useCallback((_: React.DragEvent<HTMLDivElement>) => {
-    // Do not preventDefault/stopPropagation here; let Tauri deliver tauri://file-drop with real paths.
-    dispatchDrag({ type: 'drop' });
   }, []);
 
   // Helper for robust open: try original, fallback to temp-copy if needed
@@ -205,9 +219,20 @@ export default function WelcomePage({
     } finally {
       setTimeout(() => {
         scopeOpeningRef.current = false;
-      }, 300);
+      }, OPEN_GUARD_DELAY_MS);
     }
   }, [selectedPath, setConnection, onOpenGraph]);
+
+  // Cleanup on unmount: end any outstanding security scope
+  useEffect(
+    () => () => {
+      if (scopeTokenRef.current) {
+        endSecurityScopedAccess(scopeTokenRef.current).catch(() => void 0);
+        scopeTokenRef.current = null;
+      }
+    },
+    []
+  );
 
   return (
     <div className="flex h-screen flex-row items-center justify-center">
@@ -258,15 +283,13 @@ export default function WelcomePage({
                 <CardContent className="space-y-4">
                   <div className="grid gap-4">
                     <Dropzone
-                      sqlitePath={sqlitePath}
+                      sqlitePath={selectedPath ?? ''}
                       isDragging={drag.dragging}
                       onDragEnter={onDragEnter}
                       onDragOver={onDragOver}
                       onDragLeave={onDragLeave}
-                      onDrop={onDrop}
                       onBrowseClick={onBrowseClick}
                       resetSelection={resetSelection}
-                      formatBytes={formatBytes}
                     />
                   </div>
                 </CardContent>
