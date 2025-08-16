@@ -3,7 +3,7 @@
 import { createContext, useContext, useState, ReactNode } from 'react';
 
 // Represents supported database drivers.
-type Driver = 'Sqlite' | 'Postgres' | 'MySql';
+type Driver = 'sqlite' | 'postgres' | 'mysql';
 
 // Optional metadata for connection, used for display/formatting.
 export type ConnMeta = {
@@ -72,17 +72,17 @@ export function connectionLabel(state: ConnState): string {
   if (!state.connId || !state.driver) return 'No database loaded';
   const d = state.driver;
   const m = state.meta ?? {};
-  if (d === 'Sqlite') {
+  if (d === 'sqlite') {
     return m.sqlitePath ? baseName(m.sqlitePath) : 'SQLite';
   }
-  if (d === 'Postgres') {
+  if (d === 'postgres') {
     const user = m.user ? `${m.user}@` : '';
     const host = m.host || 'localhost';
     const db = m.database || 'postgres';
     const port = m.port != null ? `:${m.port}` : '';
     return `${user}${host}${port}/${db}`;
   }
-  if (d === 'MySql') {
+  if (d === 'mysql') {
     const user = m.user ? `${m.user}@` : '';
     const host = m.host || 'localhost';
     const db = m.database || 'mysql';

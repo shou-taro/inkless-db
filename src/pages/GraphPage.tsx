@@ -135,8 +135,15 @@ export default function GraphPage({ onExit }: { onExit: () => void }) {
           name: t.name,
           columns: t.columns.map((c) => ({
             name: c.name,
-            type: c.data_type,
-            isPrimary: !!c.is_pk,
+            type: c.type ?? '',
+            // For TableNode (existing prop)
+            isPrimary: !!c.primaryKey,
+            // For SchemaBrowser (new UI props)
+            primaryKey: !!c.primaryKey,
+            nullable: c.nullable ?? true,
+            length: c.length ?? null,
+            precision: c.precision ?? null,
+            scale: c.scale ?? null,
           })),
         }));
         const fks: ForeignKey[] = raw.tables.flatMap((t) =>
@@ -153,7 +160,7 @@ export default function GraphPage({ onExit }: { onExit: () => void }) {
     return () => {
       cancelled = true;
     };
-  }, [state.connId, state, onExit]);
+  }, [state.connId]);
 
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [newTableName, setNewTableName] = useState('new_table');
@@ -181,15 +188,13 @@ export default function GraphPage({ onExit }: { onExit: () => void }) {
   }, [initialNodes, initialEdges, setNodes, setEdges]);
 
   const focusNode = (id: string) => {
+    if (!rf) return;
     const n = nodes.find((n) => n.id === id);
-    if (n && rf) {
+    if (n) {
       rf.setCenter(
         n.position.x + FOCUS_OFFSET_X,
         n.position.y + FOCUS_OFFSET_Y,
-        {
-          zoom: FOCUS_ZOOM,
-          duration: FOCUS_DURATION_MS,
-        }
+        { zoom: FOCUS_ZOOM, duration: FOCUS_DURATION_MS }
       );
     }
   };
@@ -209,7 +214,8 @@ export default function GraphPage({ onExit }: { onExit: () => void }) {
 
       // Quote identifiers per dialect to be safe with mixed‑case or reserved names.
       const q = (id: string) => {
-        if (state.driver === 'MySql') return `\`${id}\``; // MySQL backticks
+        const d = state.driver;
+        if (d && String(d).toLowerCase() === 'mysql') return `\`${id}\``; // MySQL backticks
         return `"${id.replace(/"/g, '""')}"`; // SQLite/Postgres double quotes
       };
 
@@ -461,10 +467,8 @@ export default function GraphPage({ onExit }: { onExit: () => void }) {
                     className="mr-1 border-violet-200/60 bg-white/70 backdrop-blur-sm hover:bg-white/90"
                     aria-label="End session and return to Welcome"
                     title="End session and return to Welcome"
-                    onClick={async () => {
-                      try {
-                        clearConnection();
-                      } catch {}
+                    onClick={() => {
+                      clearConnection();
                       onExit();
                     }}
                   >

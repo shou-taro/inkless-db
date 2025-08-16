@@ -76,12 +76,55 @@ pub struct SchemaArgs {
 
 #[tauri::command]
 pub async fn get_schema(reg: State<'_, Registry>, args: SchemaArgs) -> Result<serde_json::Value, String> {
+    use serde_json::{json, Value};
+
     let pools = reg.inner.read().await;
-    let pool = pools.get(&args.conn_id).ok_or_else(|| "connection not found".to_string())?;
-    schema::inspect_schema(pool)
-        .await
-        .map(|s| serde_json::to_value(s).unwrap_or_default())
-        .map_err(|e| e.to_string())
+    let pool = pools
+        .get(&args.conn_id)
+        .ok_or_else(|| "connection not found".to_string())?;
+
+    let s = schema::inspect_schema(pool).await.map_err(|e| e.to_string())?;
+    let mut v = serde_json::to_value(s).unwrap_or_else(|_| json!({}));
+
+    // Ensure new fields are present in the JSON payload for each column.
+    if let Some(obj) = v.as_object_mut() {
+        if let Some(tables) = obj.get_mut("tables").and_then(|t| t.as_array_mut()) {
+            for t in tables.iter_mut() {
+                if let Some(cols) = t.get_mut("columns").and_then(|c| c.as_array_mut()) {
+                    for c in cols.iter_mut() {
+                        if let Some(col) = c.as_object_mut() {
+                            col.entry("primaryKey").or_insert(Value::Bool(false));
+                            // If backend provided `not_null` accidentally, convert it to `nullable`
+                            if let Some(nn) = col.remove("not_null") { // legacy field -> boolean
+                                let nullable = match nn {
+                                    Value::Bool(b) => Value::Bool(!b),
+                                    Value::Number(n) => Value::Bool(n.as_i64().unwrap_or(0) == 0),
+                                    _ => Value::Bool(true),
+                                };
+                                col.insert("nullable".into(), nullable);
+                            }
+                            col.entry("nullable").or_insert(Value::Bool(true));
+                            col.entry("length").or_insert(Value::Null);
+                            col.entry("precision").or_insert(Value::Null);
+                            col.entry("scale").or_insert(Value::Null);
+                            // normalise default -> defaultValue if needed
+                            if let Some(def) = col.remove("default") {
+                                col.insert("defaultValue".into(), def);
+                            } else {
+                                col.entry("defaultValue").or_insert(Value::Null);
+                            }
+                            // normalise data_type -> type if needed
+                            if let Some(dt) = col.remove("data_type") {
+                                col.insert("type".into(), dt);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(v)
 }
 
 #[derive(Deserialize)]

@@ -5,7 +5,7 @@
 import { invoke } from '@tauri-apps/api/core';
 
 // --- Shared types between frontend and backend ---
-export type Driver = 'sqlite' | 'postgres' | 'MySql';
+export type Driver = 'sqlite' | 'postgres' | 'mysql';
 
 export interface QueryResult {
   columns: string[];
@@ -38,10 +38,13 @@ export interface DatabaseSchema {
     type_: string; // 'BASE TABLE' | 'VIEW' | etc.
     columns: Array<{
       name: string;
-      data_type: string;
-      not_null: boolean;
-      default?: string | null;
-      is_pk: boolean;
+      type?: string;
+      nullable: boolean;
+      defaultValue?: string | number | boolean | null;
+      primaryKey: boolean;
+      length?: number | null;
+      precision?: number | null;
+      scale?: number | null;
     }>;
     foreign_keys: Array<{
       from: string;
@@ -134,7 +137,7 @@ export async function openSqliteDialog(): Promise<string | null> {
 
 export async function fileSize(path: string): Promise<number> {
   try {
-    return await invoke<number>('inkless_fs_size', { path });
+    return await invoke<number>('inkless_fs_size', { args: { path } });
   } catch (e) {
     throw toError(e);
   }
@@ -165,5 +168,5 @@ export async function endSecurityScopedAccess(id: string): Promise<void> {
 }
 
 export async function copyToTemp(path: string): Promise<string> {
-  return await invoke<string>('copy_to_temp', { path });
+  return await invoke<string>('copy_to_temp', { args: { path } });
 }

@@ -154,6 +154,23 @@ fn gen_id() -> String {
     format!("{:x}-{}", nanos, std::process::id())
 }
 
+// Helper to parse length/precision/scale from SQLite type strings.
+fn parse_len_prec_scale(ty: &str) -> (Option<u32>, Option<u32>, Option<u32>) {
+    // Examples: VARCHAR(255), CHAR(32), NUMERIC(10,2), DECIMAL(12, 4)
+    if let Some(start) = ty.find('(') {
+        if let Some(end) = ty[start + 1..].find(')') {
+            let inside = &ty[start + 1..start + 1 + end];
+            let mut parts = inside.split(',').map(|s| s.trim());
+            let a = parts.next().and_then(|s| s.parse::<u32>().ok());
+            let b = parts.next().and_then(|s| s.parse::<u32>().ok());
+            // If there is a first only, treat it as length for char types or precision for numeric
+            // We cannot know the family reliably here, so we return both and the caller may prefer one.
+            return (a, a, b);
+        }
+    }
+    (None, None, None)
+}
+
 fn rows_to_result_sqlite(rows: Vec<sqlx::sqlite::SqliteRow>, cap: usize) -> QueryResult {
     let mut columns: Vec<String> = vec![];
     let mut out: Vec<Vec<Value>> = vec![];
@@ -327,12 +344,17 @@ async fn schema_sqlite(pool: &Pool<sqlx::Sqlite>) -> Result<Value> {
             .await?
             .into_iter()
             .map(|r| {
+                let raw_ty = r.try_get::<String, _>("type").unwrap_or_default();
+                let (len_opt, prec_opt, scale_opt) = parse_len_prec_scale(&raw_ty);
                 json!({
                     "name": r.try_get::<String, _>("name").unwrap_or_default(),
-                    "data_type": r.try_get::<String, _>("type").unwrap_or_default(),
-                    "not_null": r.try_get::<i64, _>("notnull").unwrap_or(0) == 1,
-                    "default": r.try_get::<Option<String>, _>("dflt_value").unwrap_or(None),
-                    "is_pk": r.try_get::<i64, _>("pk").unwrap_or(0) == 1
+                    "type": raw_ty,
+                    "nullable": !(r.try_get::<i64, _>("notnull").unwrap_or(0) == 1),
+                    "defaultValue": r.try_get::<Option<String>, _>("dflt_value").unwrap_or(None),
+                    "primaryKey": r.try_get::<i64, _>("pk").unwrap_or(0) == 1,
+                    "length": len_opt,
+                    "precision": prec_opt,
+                    "scale": scale_opt
                 })
             })
             .collect();
@@ -389,24 +411,27 @@ async fn schema_postgres(pool: &Pool<sqlx::Postgres>) -> Result<Value> {
 
         let cols = sqlx::query(
             r#"
-            SELECT a.attname AS column_name,
-                   t.typname AS data_type,
-                   a.attnotnull AS not_null,
-                   pg_get_expr(ad.adbin, ad.adrelid) AS default,
-                   EXISTS (
-                       SELECT 1 FROM pg_index i
-                       WHERE i.indrelid = a.attrelid
-                         AND a.attnum = ANY(i.indkey)
-                         AND i.indisprimary
-                   ) AS is_pk
-            FROM pg_attribute a
-            JOIN pg_class c ON c.oid = a.attrelid
-            JOIN pg_type t ON t.oid = a.atttypid
-            LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
-            JOIN pg_namespace n ON n.oid = c.relnamespace
-            WHERE a.attnum > 0 AND NOT a.attisdropped AND n.nspname = $1 AND c.relname = $2
-            ORDER BY a.attnum
-            "#,
+    SELECT c.column_name,
+           c.data_type,
+           (c.is_nullable = 'YES') AS is_nullable,
+           c.character_maximum_length,
+           c.numeric_precision,
+           c.numeric_scale,
+           c.column_default,
+           EXISTS (
+               SELECT 1 FROM pg_index i
+               JOIN pg_class cls ON cls.oid = i.indrelid
+               JOIN pg_attribute att ON att.attrelid = i.indrelid AND att.attnum = ANY(i.indkey)
+               JOIN pg_namespace nsp ON nsp.oid = cls.relnamespace
+               WHERE i.indisprimary
+                 AND nsp.nspname = $1
+                 AND cls.relname = $2
+                 AND att.attname = c.column_name
+           ) AS is_pk
+    FROM information_schema.columns c
+    WHERE c.table_schema = $1 AND c.table_name = $2
+    ORDER BY c.ordinal_position
+    "#,
         )
         .bind(&schema)
         .bind(&name)
@@ -418,10 +443,13 @@ async fn schema_postgres(pool: &Pool<sqlx::Postgres>) -> Result<Value> {
             .map(|r| {
                 json!({
                     "name": r.try_get::<String, _>("column_name").unwrap_or_default(),
-                    "data_type": r.try_get::<String, _>("data_type").unwrap_or_default(),
-                    "not_null": r.try_get::<bool, _>("not_null").unwrap_or(false),
-                    "default": r.try_get::<Option<String>, _>("default").unwrap_or(None),
-                    "is_pk": r.try_get::<bool, _>("is_pk").unwrap_or(false)
+                    "type": r.try_get::<String, _>("data_type").unwrap_or_default(),
+                    "nullable": r.try_get::<bool, _>("is_nullable").unwrap_or(true),
+                    "defaultValue": r.try_get::<Option<String>, _>("column_default").unwrap_or(None),
+                    "primaryKey": r.try_get::<bool, _>("is_pk").unwrap_or(false),
+                    "length": r.try_get::<Option<i32>, _>("character_maximum_length").ok().flatten().map(|v| v as u32),
+                    "precision": r.try_get::<Option<i32>, _>("numeric_precision").ok().flatten().map(|v| v as u32),
+                    "scale": r.try_get::<Option<i32>, _>("numeric_scale").ok().flatten().map(|v| v as u32)
                 })
             })
             .collect();
@@ -501,11 +529,18 @@ async fn schema_mysql(pool: &Pool<sqlx::MySql>) -> Result<Value> {
 
         let cols = sqlx::query(
             r#"
-            SELECT column_name, data_type, is_nullable, column_default, column_key
-            FROM information_schema.columns
-            WHERE table_schema = ? AND table_name = ?
-            ORDER BY ordinal_position
-            "#,
+    SELECT column_name,
+           data_type,
+           is_nullable,
+           column_default,
+           column_key,
+           character_maximum_length,
+           numeric_precision,
+           numeric_scale
+    FROM information_schema.columns
+    WHERE table_schema = ? AND table_name = ?
+    ORDER BY ordinal_position
+    "#,
         )
         .bind(&schema)
         .bind(&name)
@@ -518,10 +553,13 @@ async fn schema_mysql(pool: &Pool<sqlx::MySql>) -> Result<Value> {
                 let key: String = r.try_get::<String, _>("column_key").unwrap_or_default();
                 json!({
                     "name": r.try_get::<String, _>("column_name").unwrap_or_default(),
-                    "data_type": r.try_get::<String, _>("data_type").unwrap_or_default(),
-                    "not_null": r.try_get::<String, _>("is_nullable").unwrap_or_else(|_| "YES".into()) == "NO",
-                    "default": r.try_get::<Option<String>, _>("column_default").unwrap_or(None),
-                    "is_pk": key == "PRI",
+                    "type": r.try_get::<String, _>("data_type").unwrap_or_default(),
+                    "nullable": r.try_get::<String, _>("is_nullable").unwrap_or_else(|_| "YES".into()) == "YES",
+                    "defaultValue": r.try_get::<Option<String>, _>("column_default").unwrap_or(None),
+                    "primaryKey": key == "PRI",
+                    "length": r.try_get::<Option<i64>, _>("character_maximum_length").ok().flatten().map(|v| v as u32),
+                    "precision": r.try_get::<Option<i64>, _>("numeric_precision").ok().flatten().map(|v| v as u32),
+                    "scale": r.try_get::<Option<i64>, _>("numeric_scale").ok().flatten().map(|v| v as u32)
                 })
             })
             .collect();

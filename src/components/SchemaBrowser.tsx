@@ -29,7 +29,20 @@ import { Search, Plus, Info, Table as TableIcon } from 'lucide-react';
  */
 
 // Minimal shape definitions; expand or import shared types when available.
-export type Column = { name: string; type?: string };
+export type Column = {
+  name: string;
+  type?: string;
+  /** Column is part of primary key */
+  primaryKey?: boolean;
+  /** Whether the column allows NULL values */
+  nullable?: boolean;
+  /** Max length for character types (e.g. VARCHAR) */
+  length?: number;
+  /** Numeric precision (total digits) */
+  precision?: number;
+  /** Numeric scale (digits after decimal) */
+  scale?: number;
+};
 export type Table = { name: string; columns?: Column[] };
 export type Schema = { tables: Table[] };
 
@@ -70,6 +83,31 @@ function Highlight({ text, query }: { text: string; query: string }) {
   );
 }
 
+function parseLenPrecScaleFromType(ty?: string): {
+  length?: number;
+  precision?: number;
+  scale?: number;
+} {
+  if (!ty) return {};
+  const m = ty.match(/\(([^)]+)\)/);
+  if (!m) return {};
+  const parts = m[1].split(',').map((s) => s.trim());
+  const a = parts[0] && /^\d+$/.test(parts[0]) ? Number(parts[0]) : undefined;
+  const b = parts[1] && /^\d+$/.test(parts[1]) ? Number(parts[1]) : undefined;
+  // Heuristic: CHAR/VARCHAR/TEXT-like → length, NUMERIC/DECIMAL-like → precision/scale
+  const upper = ty.toUpperCase();
+  if (/CHAR|VARCHAR|N?VAR?CHAR|STRING/.test(upper)) {
+    return { length: a };
+  }
+  if (/DECIMAL|NUMERIC/.test(upper)) {
+    return { precision: a, scale: b };
+  }
+  // Fallback: if two numbers, treat as precision/scale; if one, treat as length
+  if (a !== undefined && b !== undefined) return { precision: a, scale: b };
+  if (a !== undefined) return { length: a };
+  return {};
+}
+
 export default function SchemaBrowser({
   schema,
   query,
@@ -93,12 +131,12 @@ export default function SchemaBrowser({
 
   return (
     <aside
-      className={`m-4 flex w-[260px] min-w-[260px] flex-col rounded-lg border-r border-purple-200 bg-purple-50 shadow-md ${className ?? ''}`.replace(
+      className={`mx-5 my-6 flex w-[260px] min-w-[260px] flex-col rounded-lg border-r border-violet-200 bg-violet-100 shadow-md ${className ?? ''}`.replace(
         /\bml-2\b/,
         ''
       )}
       aria-label="Schema browser"
-      style={{ height: 'calc(100% - 2rem)' }}
+      style={{ height: 'calc(100% - 3rem)' }}
     >
       <div className="flex items-center justify-between p-2.5">
         <div className="flex items-center gap-2 text-sm font-medium text-purple-700">
@@ -148,9 +186,9 @@ export default function SchemaBrowser({
                 <button
                   type="button"
                   onClick={() => onSelect(t.name)}
-                  className={`group flex w-full items-center gap-2 rounded px-3 py-2 text-left transition hover:bg-purple-100 focus:outline-none focus:ring-2 focus:ring-ring ${
-                    isActive ? 'bg-purple-200' : ''
-                  }`}
+                  className={`group flex w-full items-center gap-2 rounded px-3 py-2 text-left transition-colors focus:outline-none focus:ring-2 focus:ring-ring ${
+                    isActive ? 'bg-violet-300' : 'hover:bg-violet-200'
+                  } active:bg-violet-200`}
                   aria-current={isActive ? 'true' : undefined}
                 >
                   <TableIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -192,12 +230,31 @@ export default function SchemaBrowser({
                     key={c.name}
                     className="flex items-center justify-between"
                   >
-                    <span className="truncate">{c.name}</span>
-                    {c.type && (
-                      <span className="ml-2 shrink-0 rounded bg-purple-100 px-1.5 py-0.5 text-[10px] leading-4 text-purple-700">
-                        {c.type}
-                      </span>
-                    )}
+                    {/* Left: name with key emoji if primary key */}
+                    <span className="truncate text-sm" title={c.name}>
+                      {c.primaryKey ? '🔑 ' : ''}
+                      {c.name}
+                    </span>
+                    {/* Right: NOT NULL / NULL OK and type */}
+                    <div className="flex shrink-0 items-center gap-1">
+                      {c.nullable === false ? (
+                        <span className="rounded bg-rose-100 px-1.5 py-0.5 text-[10px] leading-4 text-rose-700">
+                          NOT NULL
+                        </span>
+                      ) : (
+                        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] leading-4 text-slate-600">
+                          NULL OK
+                        </span>
+                      )}
+                      {c.type ? (
+                        <span
+                          className="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] leading-4 text-purple-700"
+                          title={c.type}
+                        >
+                          {c.type}
+                        </span>
+                      ) : null}
+                    </div>
                   </li>
                 ))}
                 {selectedTable.columns.length > 12 && (
