@@ -97,7 +97,7 @@ describe('tauri thin client wrappers', () => {
     const size = await fileSize('/tmp/foo');
     expect(size).toBe(123);
     expect(invoke).toHaveBeenCalledWith('inkless_fs_size', {
-      path: '/tmp/foo',
+      args: { path: '/tmp/foo' },
     });
   });
 
