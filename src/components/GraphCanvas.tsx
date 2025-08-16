@@ -112,7 +112,7 @@ function GraphCanvas({
 }: GraphCanvasProps) {
   return (
     <div
-      className={`relative h-full w-full bg-violet-100 [--edge-stroke:theme(colors.violet500Hex)] [--grid-color:rgba(124,58,237,0.12)] [--label-fill:theme(colors.slate700Hex)] [--minimap-fill:theme(colors.lilac200Hex)] [--minimap-stroke:theme(colors.lilac600Hex)] ${className ?? ''}`}
+      className={`relative h-full w-full bg-violet-100 [--edge-stroke:theme('colors.violet.500')] [--grid-color:rgba(124,58,237,0.12)] [--label-fill:theme(colors.slate700Hex)] [--minimap-fill:theme(colors.lilac200Hex)] [--minimap-stroke:theme(colors.lilac600Hex)] ${className ?? ''}`}
     >
       <ReactFlow
         nodes={nodes}

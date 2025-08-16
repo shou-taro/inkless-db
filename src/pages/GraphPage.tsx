@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useConnection } from '@/store/connection';
-import { getSchema, type DatabaseSchema } from '@/lib/db/tauri';
+import { useConnection, connectionLabel } from '@/store/connection';
+import {
+  getSchema,
+  executeSql,
+  type DatabaseSchema,
+  type QueryResult,
+} from '@/lib/tauri';
 import {
   Node,
   Edge,
@@ -28,6 +33,7 @@ import {
   Table,
   FileText,
   LogOut,
+  X,
 } from 'lucide-react';
 
 import SchemaBrowser from '@/components/SchemaBrowser';
@@ -46,6 +52,7 @@ const FOCUS_OFFSET_X = 120; // centre offset when focusing a node (x)
 const FOCUS_OFFSET_Y = 60; // centre offset when focusing a node (y)
 const FOCUS_ZOOM = 1.1; // zoom level used when focusing a node
 const FOCUS_DURATION_MS = 300; // animation duration for focus transitions
+const PREVIEW_LIMIT = 10; // number of rows to show in preview modal
 
 // Types for schema: derived from backend schema, adapted minimally for view model here.
 // These types are still used for the UI, but are populated from DatabaseSchema.
@@ -143,7 +150,9 @@ export default function GraphPage({ onExit }: { onExit: () => void }) {
         console.error('Failed to load schema:', e);
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [state.connId, state, onExit]);
 
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -194,7 +203,25 @@ export default function GraphPage({ onExit }: { onExit: () => void }) {
     setPreviewError(null);
     setPreview(null);
     try {
-      throw new Error('Row preview is not available for this connection yet.');
+      if (!state.connId || !state.driver) {
+        throw new Error('No active connection');
+      }
+
+      // Quote identifiers per dialect to be safe with mixed‑case or reserved names.
+      const q = (id: string) => {
+        if (state.driver === 'MySql') return `\`${id}\``; // MySQL backticks
+        return `"${id.replace(/"/g, '""')}"`; // SQLite/Postgres double quotes
+      };
+
+      const sql = `SELECT * FROM ${q(tableName)} LIMIT ${PREVIEW_LIMIT}`;
+      const res: QueryResult = await executeSql(
+        state.connId,
+        sql,
+        PREVIEW_LIMIT
+      );
+
+      // Normalise into PreviewResult shape the table expects
+      setPreview({ columns: res.columns, rows: res.rows });
     } catch (e: any) {
       setPreviewError(String(e?.message || e));
     } finally {
@@ -264,100 +291,135 @@ export default function GraphPage({ onExit }: { onExit: () => void }) {
 
               {isPreviewOpen && (
                 <div className="pointer-events-auto fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-                  <Card className="w-[880px] max-w-[95vw]">
-                    <CardHeader className="flex flex-row items-center justify-between">
-                      <CardTitle className="text-violet-700">
-                        {selectedId ? `Preview: ${selectedId}` : 'Preview'}
+                  <Card className="w-[880px] max-w-[95vw] overflow-hidden rounded-2xl border border-violet-200/60 bg-white/90 shadow-2xl">
+                    <CardHeader className="flex flex-row items-center justify-between border-b border-violet-200/60 bg-white/70 p-3 px-5 backdrop-blur">
+                      <CardTitle className="pl-1 text-violet-700">
+                        <span className="mr-2">
+                          {selectedId ? `Preview: ${selectedId}` : 'Preview'}
+                        </span>
+                        <span className="rounded-full bg-violet-100 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 ring-1 ring-violet-200">
+                          first {PREVIEW_LIMIT}
+                        </span>
                       </CardTitle>
                       <div className="flex items-center gap-2">
                         <Button
-                          variant="outline"
+                          variant="ghost"
                           size="sm"
+                          className="hover:border hover:border-violet-200/60"
                           onClick={() => setIsPreviewOpen(false)}
                         >
-                          Close
+                          <X className="h-5 w-5" />
                         </Button>
                       </div>
                     </CardHeader>
-                    <CardContent>
+                    <CardContent className="p-4">
                       {previewLoading && (
-                        <div className="py-6 text-center text-sm text-slate-600">
+                        <div className="flex h-[240px] items-center justify-center text-sm text-slate-600">
                           Loading preview…
                         </div>
                       )}
                       {previewError && (
-                        <div className="py-6 text-center text-sm text-red-600">
+                        <div className="flex h-[240px] items-center justify-center text-sm text-red-600">
                           {previewError}
                         </div>
                       )}
                       {!previewLoading && !previewError && preview && (
-                        <div className="overflow-auto rounded-md border">
-                          <table className="w-full table-auto text-sm">
-                            <thead className="bg-violet-50 text-slate-700">
-                              <tr>
-                                {preview.columns.map((c) => (
-                                  <th
-                                    key={c}
-                                    className="whitespace-nowrap px-3 py-2 text-left font-medium"
-                                  >
-                                    {c}
-                                  </th>
-                                ))}
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y">
-                              {preview.rows.length === 0 ? (
+                        <div className="flex w-full items-center justify-center">
+                          <div className="mx-auto w-[94%] overflow-hidden rounded-xl bg-white/80 ring-1 ring-violet-200/60">
+                            <table className="w-full table-auto text-sm">
+                              <thead className="bg-violet-50/60 text-slate-700">
                                 <tr>
-                                  <td
-                                    className="px-3 py-3 text-center text-slate-500"
-                                    colSpan={Math.max(
-                                      1,
-                                      preview.columns.length
-                                    )}
-                                  >
-                                    (no rows)
-                                  </td>
+                                  {preview.columns.map((c) => (
+                                    <th
+                                      key={c}
+                                      className="whitespace-nowrap border-b px-3 py-2 text-left text-[12px] font-semibold text-slate-700"
+                                      title={c}
+                                    >
+                                      {c}
+                                    </th>
+                                  ))}
                                 </tr>
-                              ) : (
-                                preview.rows.map((r, i) => (
-                                  <tr key={i} className="hover:bg-violet-50/40">
-                                    {preview.columns.map((c) => (
-                                      <td
-                                        key={c}
-                                        className="whitespace-nowrap px-3 py-2 align-top text-slate-700"
-                                      >
-                                        {(() => {
-                                          const idx =
-                                            preview.columns.indexOf(c);
-                                          const v = Array.isArray(r)
-                                            ? idx >= 0
-                                              ? r[idx]
-                                              : undefined
-                                            : r?.[c];
-                                          if (v === null || v === undefined)
-                                            return (
-                                              <span className="text-slate-400">
-                                                NULL
-                                              </span>
-                                            );
-                                          if (typeof v === 'object')
-                                            return (
-                                              <code className="text-xs">
-                                                {JSON.stringify(v)}
-                                              </code>
-                                            );
-                                          return String(v);
-                                        })()}
-                                      </td>
-                                    ))}
+                              </thead>
+                              <tbody className="divide-y">
+                                {preview.rows.length === 0 ? (
+                                  <tr>
+                                    <td
+                                      className="px-3 py-3 text-center text-slate-500"
+                                      colSpan={Math.max(
+                                        1,
+                                        preview.columns.length
+                                      )}
+                                    >
+                                      (no rows)
+                                    </td>
                                   </tr>
-                                ))
-                              )}
-                            </tbody>
-                          </table>
+                                ) : (
+                                  preview.rows.map((r, i) => (
+                                    <tr
+                                      key={i}
+                                      className="hover:bg-violet-50/40"
+                                    >
+                                      {preview.columns.map((c) => (
+                                        <td
+                                          key={c}
+                                          className="whitespace-nowrap px-3 py-2 align-top text-slate-700"
+                                        >
+                                          {(() => {
+                                            const idx =
+                                              preview.columns.indexOf(c);
+                                            const v = Array.isArray(r)
+                                              ? idx >= 0
+                                                ? r[idx]
+                                                : undefined
+                                              : r?.[c];
+                                            if (v === null || v === undefined)
+                                              return (
+                                                <span className="text-slate-400">
+                                                  NULL
+                                                </span>
+                                              );
+                                            if (typeof v === 'object')
+                                              return (
+                                                <code className="text-xs">
+                                                  {JSON.stringify(v)}
+                                                </code>
+                                              );
+                                            return String(v);
+                                          })()}
+                                        </td>
+                                      ))}
+                                    </tr>
+                                  ))
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
                         </div>
                       )}
                     </CardContent>
+                    <CardFooter className="flex items-center justify-end gap-2 border-t border-violet-200/60 bg-white/80 p-5">
+                      <Button
+                        className="h-9 bg-violet-600 text-white shadow-sm transition-colors hover:bg-violet-700 focus:ring-2 focus:ring-violet-300/50 active:bg-violet-800"
+                        onClick={() => {
+                          setIsPreviewOpen(false);
+                          if (selectedId) {
+                            window.dispatchEvent(
+                              new CustomEvent('inkless:open-data-view', {
+                                detail: {
+                                  table: selectedId,
+                                  limit: null,
+                                  mode: 'workbench',
+                                },
+                              })
+                            );
+                          }
+                        }}
+                        title="Open table in Data Workbench"
+                        aria-label="Open table in Data Workbench"
+                      >
+                        Open in Data Workbench
+                      </Button>
+                    </CardFooter>
                   </Card>
                 </div>
               )}
@@ -365,7 +427,7 @@ export default function GraphPage({ onExit }: { onExit: () => void }) {
               {/* Canvas panel */}
               <div className="absolute inset-0 flex flex-col rounded-xl border border-violet-200/50 bg-violet-200/70 p-2 shadow-lg backdrop-blur-sm">
                 {/* Header: ER diagram title and DB info */}
-                <div className="mb-1 flex min-h-[3.25rem] items-center px-2 pb-3 pr-24">
+                <div className="mb-1 flex min-h-[2.5rem] items-center px-2 pr-24">
                   <div className="flex min-w-0 items-center gap-3">
                     <span className="shrink-0 bg-gradient-to-r from-violet-700 via-fuchsia-600 to-violet-700 bg-clip-text text-lg font-semibold text-transparent">
                       ER diagram
@@ -380,7 +442,7 @@ export default function GraphPage({ onExit }: { onExit: () => void }) {
                             aria-hidden
                           />
                           <span className="min-w-0 max-w-[52ch] truncate text-sm text-slate-700">
-                            Connected
+                            {connectionLabel(state)}
                           </span>
                         </>
                       ) : (
@@ -400,7 +462,9 @@ export default function GraphPage({ onExit }: { onExit: () => void }) {
                     aria-label="End session and return to Welcome"
                     title="End session and return to Welcome"
                     onClick={async () => {
-                      try { clearConnection(); } catch {}
+                      try {
+                        clearConnection();
+                      } catch {}
                       onExit();
                     }}
                   >
@@ -457,8 +521,8 @@ export default function GraphPage({ onExit }: { onExit: () => void }) {
                         setIsPreviewOpen(true);
                         await loadPreview(selectedId);
                       }}
-                      aria-label="Preview first 5 rows"
-                      title="Preview first 5 rows"
+                      aria-label={`Preview first ${PREVIEW_LIMIT} rows`}
+                      title={`Preview first ${PREVIEW_LIMIT} rows`}
                     >
                       <Table className="h-4 w-4" />
                     </Button>

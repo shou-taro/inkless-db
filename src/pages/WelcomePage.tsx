@@ -172,7 +172,7 @@ export default function WelcomePage({
           );
         }
         const connId = await openConnection('sqlite', selectedPath);
-        setConnection(connId, 'Sqlite');
+        setConnection(connId, 'Sqlite', { sqlitePath: selectedPath });
         onOpenGraph();
         return; // success
       } catch (e) {
@@ -192,7 +192,7 @@ export default function WelcomePage({
       // Fallback: copy to temp via backend command (no frontend fs permissions needed)
       const target = await copyToTemp(selectedPath);
       const connId = await openConnection('sqlite', target);
-      setConnection(connId, 'Sqlite');
+      setConnection(connId, 'Sqlite', { sqlitePath: target });
       toast.warning(
         'Opened a temporary copy. Changes may not be written back to the original.'
       );
