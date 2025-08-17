@@ -1,8 +1,10 @@
 # Inkless DB
 
 [![CI](https://github.com/shou-taro/inkless-db/actions/workflows/ci.yml/badge.svg)](https://github.com/shou-taro/inkless-db/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/yourname/inkless-db)](https://github.com/yourname/inkless-db/releases)
+[![Release](https://img.shields.io/github/v/release/shou-taro/inkless-db)](https://github.com/shou-taro/inkless-db/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-purple.svg)](./LICENSE)
+![Tauri](https://img.shields.io/badge/Made%20with-Tauri-24C8DB?logo=tauri&logoColor=white)
+![React](https://img.shields.io/badge/Made%20with-React-61DAFB?logo=react&logoColor=white)
 
 > Inkless DB is a modern, cross-platform desktop application for SQLite, PostgreSQL, and MySQL.  
 > Its unique concept is "inkless": you can explore, visualise, and manage databases entirely through the GUI — no queries required.  
@@ -22,19 +24,19 @@
 
 ### Prerequisites
 
-- Node.js and pnpm package manager
+- Node.js and npm package manager
 - Rust toolchain (for building Tauri backend)
 
 ### Pre-built Binaries (Coming Soon)
 
-Downloadable from [GitHub Releases](https://github.com/yourname/inkless-db/releases).  
+Downloadable from [GitHub Releases](https://github.com/shou-taro/inkless-db/releases).  
 Supported platforms: macOS, Windows, Linux.
 
 ### Build from Source
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourname/inkless-db.git
+git clone https://github.com/shou-taro/inkless-db.git
 cd inkless-db
 
 # Install dependencies
