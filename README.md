@@ -18,8 +18,6 @@
 
 ![demo-chinook-er](./docs/screenshots/demo-chinook-er.png)
 
----
-
 ## 🚀 Installation
 
 ### Prerequisites
@@ -46,15 +44,11 @@ npm install
 npm run tauri dev
 ```
 
----
-
 ## 🛠 Tech Stack
 
 - **Frontend:** React (Vite), shadcn/ui, React Flow (ER diagram rendering)
 - **Desktop:** Tauri v2
 - **Backend:** Rust with SQLx, SQLite
-
----
 
 ## 📌 Roadmap
 
@@ -62,8 +56,6 @@ npm run tauri dev
 - Support for PostgreSQL and MySQL databases
 - Enhanced ER diagram layout: overlap avoidance, improved readability
 - Query result visualization with graphs and charts
-
----
 
 ## 📄 License
 
